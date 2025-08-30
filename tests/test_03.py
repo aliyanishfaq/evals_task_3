@@ -11,6 +11,10 @@ CANDIDATE_NAME = get_git_branch()
 LLM_AS_JUDGE_MODEL = "claude-sonnet-4-20250514"
 CODE_FOLDER = [pathlib.Path("../")]
 
+HUMAN_NOTES = """
+1. Local/Deployed Testing: 'NoneType' object is not subscriptable. The code does not return the response because of it.
+"""
+
 class LlmAsJudgeEvidence(BaseModel):
     issue: str
     severity: Literal["minor", "major", "critical"]
@@ -77,7 +81,7 @@ def test_best_practices_llm_judge():
         f.write(user_code)
 
     # Prompt the judge with task-specific guidelines
-    system = LLM_AS_A_JUDGE_PROMPT.format(user_task=USER_TASK, expert_code=EXPERT_CODE, user_code=user_code)
+    system = LLM_AS_A_JUDGE_PROMPT.format(user_task=USER_TASK, expert_code=EXPERT_CODE, user_code=user_code, human_notes=HUMAN_NOTES)
     user = {
         "role": "user",
         "content": "Return the JSON object evaluating the codebase."

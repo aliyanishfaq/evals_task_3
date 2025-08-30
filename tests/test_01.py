@@ -20,7 +20,8 @@ class LLMBinaryJudge(BaseModel):
 
 CANDIDATE_NAME = get_git_branch()
 DEFAULT_CONFIG_PATH = pathlib.Path.cwd() / "../langgraph.json"
-DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../text_to_sql_agent.py"
+DEFAULT_AGENT_FILENAME = os.getenv("DEFAULT_AGENT_FILENAME", "main.py")
+DEFAULT_AGENT_PATH = pathlib.Path.cwd() / f"../{DEFAULT_AGENT_FILENAME}"
 
 def _write_score(score):
     out = pathlib.Path("results"); out.mkdir(parents=True, exist_ok=True)

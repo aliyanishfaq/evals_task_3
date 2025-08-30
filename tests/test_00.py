@@ -12,7 +12,9 @@ from test_utils.test_state import INITIAL_STATE
 from test_utils.git_branch import get_git_branch
 
 
-DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../text_to_sql_agent.py"
+
+DEFAULT_AGENT_FILENAME = os.getenv("DEFAULT_AGENT_FILENAME", "main.py")
+DEFAULT_AGENT_PATH = pathlib.Path.cwd() / f"../{DEFAULT_AGENT_FILENAME}"
 CANDIDATE_NAME = get_git_branch()
 
 

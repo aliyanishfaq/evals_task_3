@@ -62,6 +62,9 @@ Expert implementation (gold standard):
 
 Coding agent implementation to evaluate:
 {user_code}
+
+The human annotator added the following notes when running the code:
+{human_notes}
 '''
 
 USER_TASK = '''

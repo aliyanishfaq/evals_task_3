@@ -12,7 +12,8 @@ from test_utils.graph_dist import compute_graph_distances
 # Use git branch name as candidate name, with fallback to env var
 CANDIDATE_NAME = get_git_branch()
 EXPERT_SRC_PATH = pathlib.Path("expert_src").resolve()
-CANDIDATE_AGENT_PATH = os.getenv("CANDIDATE_AGENT_PATH", "../text_to_sql_agent.py").strip()
+DEFAULT_AGENT_FILENAME = os.getenv("DEFAULT_AGENT_FILENAME", "main.py")
+CANDIDATE_AGENT_PATH = os.getenv("CANDIDATE_AGENT_PATH", f"../{DEFAULT_AGENT_FILENAME}").strip()
 
 def _write_score(score):
     out = pathlib.Path("results")

@@ -1,0 +1,26 @@
+{
+  "candidate": "claude-code-vanilla-3",
+  "bucket": "smoke",
+  "points": 4,
+  "max_points": 10,
+  "details": [
+    {
+      "key": "compile",
+      "points": 2,
+      "passed": true,
+      "msg": "compiled app must expose .invoke"
+    },
+    {
+      "key": "invoke_accepts_canonical_state",
+      "points": 2,
+      "passed": true,
+      "msg": ""
+    },
+    {
+      "key": "output_is_dict",
+      "points": 0,
+      "passed": false,
+      "msg": "output must be a dict"
+    }
+  ]
+}

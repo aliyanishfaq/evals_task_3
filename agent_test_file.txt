@@ -1,283 +1,352 @@
-import sqlite3
-import requests
-from typing import Dict, Any, List, Tuple
+#!/usr/bin/env python3
+
 import os
-from langchain_openai import ChatOpenAI
+
+from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
-from typing import TypedDict
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage, SystemMessage
+import os
+from dotenv import load_dotenv
 import json
 
-class AgentState(TypedDict):
-    user_query: str
-    sql_query: str
-    sql_result: List[Dict[str, Any]]
-    final_response: str
-    error: str
+load_dotenv()
 
-class TextToSQLAgent:
-    def __init__(self, openai_api_key: str):
-        self.llm = ChatOpenAI(
-            model="gpt-4",
-            api_key=openai_api_key,
-            temperature=0
-        )
-        self.db_connection = None
-        self.schema_info = ""
-        self._setup_database()
+import sqlite3
+import requests
+from typing import List, Dict, Any
+
+class ChinookDatabase:
+    def __init__(self):
+        self.connection = None
+        self.cursor = None
         
-    def _setup_database(self):
-        """Fetch Chinook database and create in-memory SQLite database"""
-        print("Fetching Chinook database...")
+    def setup_database(self):
+        """Fetch Chinook SQL and create in-memory database"""
+        sql_url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
         
-        # Fetch the SQL file
-        url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
-        response = requests.get(url)
-        
-        if response.status_code == 200:
+        try:
+            response = requests.get(sql_url)
+            response.raise_for_status()
             sql_content = response.text
             
-            # Create in-memory database
-            self.db_connection = sqlite3.connect(":memory:")
-            self.db_connection.row_factory = sqlite3.Row  # Enable column access by name
+            self.connection = sqlite3.connect(":memory:")
+            self.cursor = self.connection.cursor()
             
-            # Execute the SQL to create tables and insert data
-            cursor = self.db_connection.cursor()
-            cursor.executescript(sql_content)
-            self.db_connection.commit()
+            self.cursor.executescript(sql_content)
+            self.connection.commit()
             
-            # Extract schema information
-            self._extract_schema_info()
-            print("Database setup complete!")
-        else:
-            raise Exception(f"Failed to fetch Chinook database: {response.status_code}")
+            return True
+        except Exception as e:
+            print(f"Error setting up database: {e}")
+            return False
     
-    def _extract_schema_info(self):
-        """Extract detailed schema information for the LLM prompt"""
-        cursor = self.db_connection.cursor()
+    def get_table_schemas(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Extract detailed table schema information"""
+        if not self.connection:
+            return {}
+            
+        schemas = {}
         
         # Get all table names
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = self.cursor.fetchall()
         
-        schema_parts = []
         for table in tables:
             table_name = table[0]
             
             # Get column information
-            cursor.execute(f"PRAGMA table_info({table_name});")
-            columns = cursor.fetchall()
+            self.cursor.execute(f"PRAGMA table_info({table_name});")
+            columns = self.cursor.fetchall()
             
-            # Get sample data (first 3 rows)
-            cursor.execute(f"SELECT * FROM {table_name} LIMIT 3;")
-            sample_data = cursor.fetchall()
-            
-            # Build schema description
-            table_info = f"\nTable: {table_name}\n"
-            table_info += "Columns:\n"
-            
+            schema_info = []
             for col in columns:
-                col_name = col[1]
-                col_type = col[2]
-                is_nullable = "NOT NULL" if col[3] else "NULL"
-                is_pk = "PRIMARY KEY" if col[5] else ""
-                table_info += f"  - {col_name} ({col_type}) {is_nullable} {is_pk}\n"
+                schema_info.append({
+                    'column_name': col[1],
+                    'data_type': col[2],
+                    'not_null': bool(col[3]),
+                    'default_value': col[4],
+                    'primary_key': bool(col[5])
+                })
             
-            if sample_data:
-                table_info += "\nSample data:\n"
-                for row in sample_data:
-                    table_info += f"  {dict(row)}\n"
-            
-            schema_parts.append(table_info)
+            schemas[table_name] = schema_info
         
-        self.schema_info = "\n".join(schema_parts)
+        return schemas
     
-    def generate_sql(self, state: AgentState) -> AgentState:
-        """Generate SQL query from natural language"""
-        user_query = state["user_query"]
+    def execute_query(self, query: str) -> List[Dict[str, Any]]:
+        """Execute SQL query and return results"""
+        if not self.connection:
+            return []
+            
+        try:
+            self.cursor.execute(query)
+            columns = [description[0] for description in self.cursor.description]
+            rows = self.cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append(dict(zip(columns, row)))
+            
+            return results
+        except Exception as e:
+            print(f"Error executing query: {e}")
+            return []
+    
+    def get_schema_description(self) -> str:
+        """Get a formatted description of all table schemas"""
+        schemas = self.get_table_schemas()
+        description = "Database Schema:\n\n"
         
-        prompt = f"""You are a SQL expert. Convert the following natural language question into a SQL query for the Chinook music database.
+        for table_name, columns in schemas.items():
+            description += f"Table: {table_name}\n"
+            for col in columns:
+                pk = " (PRIMARY KEY)" if col['primary_key'] else ""
+                nn = " NOT NULL" if col['not_null'] else ""
+                description += f"  - {col['column_name']}: {col['data_type']}{pk}{nn}\n"
+            description += "\n"
+        
+        return description
+    
+    def close(self):
+        """Close database connection"""
+        if self.connection:
+            self.connection.close()
 
-Database Schema:
-{self.schema_info}
+class TextToSQLState:
+    def __init__(self):
+        self.user_question: str = ""
+        self.generated_sql: str = ""
+        self.query_results: List[Dict[str, Any]] = []
+        self.natural_language_response: str = ""
+        self.error: str = ""
+        self.schema_info: str = ""
+
+class TextToSQLAgent:
+    def __init__(self, api_key: str = None):
+        self.db = ChinookDatabase()
+        self.llm = ChatOpenAI(
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            model="gpt-4-turbo-preview",
+            temperature=0
+        )
+        self.setup_database()
+        
+    def setup_database(self):
+        """Initialize the Chinook database"""
+        if not self.db.setup_database():
+            raise Exception("Failed to setup Chinook database")
+    
+    def text_to_sql_node(self, state: TextToSQLState) -> Dict[str, Any]:
+        """Convert natural language question to SQL query"""
+        schema_info = self.db.get_schema_description()
+        
+        system_prompt = f"""You are a SQL expert. Convert the user's natural language question into a valid SQLite query for the Chinook database.
+
+{schema_info}
 
 Rules:
-1. Only use tables and columns that exist in the schema above
-2. Generate valid SQLite syntax
-3. If the question cannot be answered with the available data, respond with "CANNOT_ANSWER"
-4. Be precise and efficient in your queries
-5. Use appropriate JOINs when needed
-6. Handle case-insensitive searches appropriately
+1. Only generate SELECT queries - no INSERT, UPDATE, DELETE, DROP, etc.
+2. If the question cannot be answered with the available tables, respond with "NO_ANSWER"
+3. Return only the SQL query, nothing else
+4. Use proper SQLite syntax
+5. Be precise with table and column names
+6. Use appropriate JOINs when needed
 
-User Question: {user_query}
+User Question: {state.user_question}
 
-SQL Query (return only the query, no explanation):"""
+SQL Query:"""
 
         try:
-            response = self.llm.invoke(prompt)
+            messages = [SystemMessage(content=system_prompt)]
+            response = self.llm.invoke(messages)
+            
             sql_query = response.content.strip()
             
-            # Check if the query is answerable
-            if "CANNOT_ANSWER" in sql_query.upper():
-                state["error"] = "Query cannot be answered with available data"
-                return state
-            
-            # Clean up the SQL query
-            sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
-            state["sql_query"] = sql_query
-            
+            if sql_query == "NO_ANSWER" or "NO_ANSWER" in sql_query:
+                state.error = "Cannot answer this question with the available data"
+                state.generated_sql = ""
+            else:
+                state.generated_sql = sql_query
+                state.schema_info = schema_info
+                
         except Exception as e:
-            state["error"] = f"Error generating SQL: {str(e)}"
-        
-        return state
+            state.error = f"Error generating SQL: {str(e)}"
+            
+        return {"state": state}
     
-    def execute_sql(self, state: AgentState) -> AgentState:
+    def execute_sql_node(self, state: TextToSQLState) -> Dict[str, Any]:
         """Execute the generated SQL query"""
-        if state.get("error"):
-            return state
-        
-        sql_query = state.get("sql_query", "")
-        if not sql_query:
-            state["error"] = "No SQL query to execute"
-            return state
-        
+        if state.error or not state.generated_sql:
+            return {"state": state}
+            
         try:
-            cursor = self.db_connection.cursor()
-            cursor.execute(sql_query)
-            
-            # Fetch results
-            results = cursor.fetchall()
-            
-            # Convert to list of dictionaries
-            state["sql_result"] = [dict(row) for row in results]
-            
+            results = self.db.execute_query(state.generated_sql)
+            state.query_results = results
         except Exception as e:
-            state["error"] = f"SQL execution error: {str(e)}"
-        
-        return state
+            state.error = f"Error executing SQL: {str(e)}"
+            
+        return {"state": state}
     
-    def generate_response(self, state: AgentState) -> AgentState:
-        """Generate natural language response from SQL results"""
-        if state.get("error"):
-            state["final_response"] = "I don't know the answer to that question."
-            return state
+    def generate_response_node(self, state: TextToSQLState) -> Dict[str, Any]:
+        """Generate natural language response from query results"""
+        if state.error:
+            state.natural_language_response = "I don't know the answer to that question."
+            return {"state": state}
+            
+        if not state.query_results:
+            state.natural_language_response = "No results found for your query."
+            return {"state": state}
         
-        user_query = state["user_query"]
-        sql_query = state["sql_query"]
-        results = state["sql_result"]
-        
-        if not results:
-            state["final_response"] = "No results found for your query."
-            return state
-        
-        prompt = f"""Based on the SQL query results, provide a clear and natural language answer to the user's question.
+        system_prompt = f"""You are a helpful assistant that explains database query results in natural language.
 
-User's Question: {user_query}
-SQL Query Used: {sql_query}
-Query Results: {json.dumps(results, indent=2)}
+User's original question: {state.user_question}
+SQL query used: {state.generated_sql}
+Query results: {json.dumps(state.query_results, indent=2)}
 
-Provide a concise, helpful answer based on the data. If there are multiple results, summarize them appropriately. Be specific with numbers, names, and details from the results.
-
-Natural Language Response:"""
+Provide a clear, concise answer to the user's question based on the query results. 
+Be conversational and helpful. If there are multiple results, summarize appropriately.
+Do not mention SQL queries or technical details unless relevant to the answer."""
 
         try:
-            response = self.llm.invoke(prompt)
-            state["final_response"] = response.content.strip()
+            messages = [SystemMessage(content=system_prompt)]
+            response = self.llm.invoke(messages)
+            state.natural_language_response = response.content.strip()
         except Exception as e:
-            state["final_response"] = f"Error generating response: {str(e)}"
-        
-        return state
+            state.natural_language_response = "I don't know the answer to that question."
+            
+        return {"state": state}
     
-    def should_continue(self, state: AgentState) -> str:
-        """Determine if processing should continue"""
-        if state.get("error"):
+    def should_continue(self, state: TextToSQLState) -> str:
+        """Determine next step in the workflow"""
+        if state.error:
             return "generate_response"
-        if not state.get("sql_query"):
-            return "generate_sql"
-        if not state.get("sql_result") and "sql_result" not in state:
+        elif state.generated_sql and not state.query_results:
             return "execute_sql"
-        return "generate_response"
+        elif state.query_results and not state.natural_language_response:
+            return "generate_response"
+        else:
+            return END
     
-    def create_graph(self):
+    def create_workflow(self) -> StateGraph:
         """Create the LangGraph workflow"""
-        workflow = StateGraph(AgentState)
+        workflow = StateGraph(TextToSQLState)
         
         # Add nodes
-        workflow.add_node("generate_sql", self.generate_sql)
-        workflow.add_node("execute_sql", self.execute_sql)
-        workflow.add_node("generate_response", self.generate_response)
+        workflow.add_node("text_to_sql", self.text_to_sql_node)
+        workflow.add_node("execute_sql", self.execute_sql_node)
+        workflow.add_node("generate_response", self.generate_response_node)
         
-        # Define the flow
-        workflow.set_entry_point("generate_sql")
+        # Define edges
+        workflow.set_entry_point("text_to_sql")
         workflow.add_conditional_edges(
-            "generate_sql",
+            "text_to_sql",
             self.should_continue,
             {
                 "execute_sql": "execute_sql",
-                "generate_response": "generate_response"
+                "generate_response": "generate_response",
+                END: END
             }
         )
-        workflow.add_edge("execute_sql", "generate_response")
+        workflow.add_conditional_edges(
+            "execute_sql",
+            self.should_continue,
+            {
+                "generate_response": "generate_response",
+                END: END
+            }
+        )
         workflow.add_edge("generate_response", END)
         
         return workflow.compile()
     
-    def query(self, user_question: str) -> str:
-        """Main method to process user queries"""
-        app = self.create_graph()
+    def query(self, question: str) -> str:
+        """Process a natural language question and return response"""
+        state = TextToSQLState()
+        state.user_question = question
         
-        initial_state = AgentState(
-            user_query=user_question,
-            sql_query="",
-            sql_result=[],
-            final_response="",
-            error=""
-        )
+        workflow = self.create_workflow()
+        result = workflow.invoke({"state": state})
         
-        result = app.invoke(initial_state)
-        return result["final_response"]
-
-# You need to set your OpenAI API key
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    print("Please set your OPENAI_API_KEY environment variable")
-    raise Exception("OPENAI_API_KEY environment variable not set")
-
-agent = TextToSQLAgent(api_key)
-app = agent.create_graph()
-
+        return result["state"].natural_language_response
+    
+    def close(self):
+        """Close database connection"""
+        self.db.close()
 
 
 
 def main():
-    # Example usage
-    import os
+    """Main function to test the text-to-SQL agent"""
     
-    # You need to set your OpenAI API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    # Check if OpenAI API key is set
+    if not os.getenv("OPENAI_API_KEY"):
         print("Please set your OPENAI_API_KEY environment variable")
         return
     
-    agent = TextToSQLAgent(api_key)
-    
-    # Example queries
-    test_queries = [
-        "How many customers are there in total?",
-        "What are the top 5 best-selling albums?",
-        "Which artists have sold the most tracks?",
-        "What is the average price of tracks?",
-        "Show me customers from Brazil",
-        "What is the weather like today?"  # This should return "I don't know"
-    ]
-    
-    print("Text-to-SQL Agent Ready!")
-    print("=" * 50)
-    
-    for query in test_queries:
-        print(f"\nQ: {query}")
-        response = agent.query(query)
-        print(f"A: {response}")
-        print("-" * 30)
+    try:
+        # Initialize the agent
+        print("Initializing Text-to-SQL Agent...")
+        agent = TextToSQLAgent()
+        print("Agent initialized successfully!")
+        
+        # Test queries
+        test_queries = [
+            "How many customers are there in total?",
+            "What are the top 5 best-selling tracks?",
+            "Which artist has the most albums?",
+            "What is the average price of tracks?",
+            "Show me all employees and their titles",
+            "What is the weather like today?",  # Irrelevant query
+            "How many invoices were created in 2009?"
+        ]
+        
+        print("\n" + "="*50)
+        print("Testing Text-to-SQL Agent")
+        print("="*50)
+        
+        for i, query in enumerate(test_queries, 1):
+            print(f"\nQuery {i}: {query}")
+            print("-" * 40)
+            
+            try:
+                response = agent.query(query)
+                print(f"Response: {response}")
+            except Exception as e:
+                print(f"Error processing query: {e}")
+        
+        # Interactive mode
+        print("\n" + "="*50)
+        print("Interactive Mode (type 'quit' to exit)")
+        print("="*50)
+        
+        while True:
+            try:
+                user_input = input("\nEnter your question: ").strip()
+                
+                if user_input.lower() in ['quit', 'exit', 'q']:
+                    break
+                    
+                if not user_input:
+                    continue
+                    
+                response = agent.query(user_input)
+                print(f"\nResponse: {response}")
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        # Clean up
+        agent.close()
+        print("\nThank you for using the Text-to-SQL Agent!")
+        
+    except Exception as e:
+        print(f"Failed to initialize agent: {e}")
 
+
+
+agent = TextToSQLAgent()
+app = agent.create_workflow()
 if __name__ == "__main__":
     main()

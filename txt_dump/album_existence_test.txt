@@ -1,1 +1,1 @@
-{'user_query': 'How many albums exist?', 'sql_query': 'SELECT COUNT(*) FROM Album;', 'sql_result': [{'COUNT(*)': 347}], 'final_response': 'There are 347 albums in total.'}
+None

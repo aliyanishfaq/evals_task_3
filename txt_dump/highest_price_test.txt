@@ -1,1 +1,1 @@
-{'user_query': "What's the highest track price?", 'sql_query': 'SELECT MAX(UnitPrice) AS HighestTrackPrice FROM Track;', 'sql_result': [{'HighestTrackPrice': 1.99}], 'final_response': 'The highest track price is $1.99.'}
+None
