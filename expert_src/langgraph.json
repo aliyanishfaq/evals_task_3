@@ -1,0 +1,9 @@
+{
+    "graphs": {
+        "simple_text2sql": "./simple_text2sql.py:agent"
+    },
+    "env": ".env",
+    "python_version": "3.11",
+    "dependencies": ["."],
+    "image_distro": "wolfi"
+}

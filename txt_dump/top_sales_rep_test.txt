@@ -1,0 +1,1 @@
+Based on the data from the Chinook database, Jane Peacock is the sales representative with the highest business revenue, generating a total of $833.04 in sales. This total represents the sum of all invoices from customers assigned to Jane Peacock as their support representative.

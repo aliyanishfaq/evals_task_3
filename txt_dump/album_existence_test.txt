@@ -1,0 +1,1 @@
+There are 347 albums in the Chinook music database.

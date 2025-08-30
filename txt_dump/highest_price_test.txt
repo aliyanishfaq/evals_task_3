@@ -1,0 +1,1 @@
+The highest track price in the database is $1.99. This is the maximum unit price for any individual track in the Chinook music store.
