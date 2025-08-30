@@ -8,7 +8,7 @@ import hashlib
 import urllib.parse
 import pytest
 from langchain_core.messages import HumanMessage
-from test_utils.initial_state import INITIAL_STATE
+from test_utils.test_state import INITIAL_STATE, TEST_STATES
 from pydantic import BaseModel
 from langchain_anthropic import ChatAnthropic
 from test_utils.git_branch import get_git_branch
@@ -20,7 +20,7 @@ class LLMBinaryJudge(BaseModel):
 
 CANDIDATE_NAME = get_git_branch()
 DEFAULT_CONFIG_PATH = pathlib.Path.cwd() / "../langgraph.json"
-DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../main.py"
+DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../text_to_sql_agent.py"
 
 def _write_score(score):
     out = pathlib.Path("results"); out.mkdir(parents=True, exist_ok=True)
@@ -67,6 +67,9 @@ def __llm_as_judge(test_response, expected_response):
 
     response = structured_llm.invoke(prompt)
     return response.match, response.reasoning
+
+def _out_parser(out):
+    return out["final_response"]
 
 LLM_HOST_ALLOWLIST = [
     "api.openai.com",
@@ -187,13 +190,11 @@ def test_basics(monkeypatch):
     
     # C.1) Artist count test (2 pts)
     try:
-        state = {
-            "messages": [HumanMessage("how many artists are there?")]
-        }
+        state = TEST_STATES["c_1"]
         out = app.invoke(state)
         with open("txt_dump/artist_count_test.txt", "w") as f:
             f.write(str(out))
-        response = out["messages"][-1].content
+        response = _out_parser(out)
 
         ok = "275" in response
         if ok:
@@ -205,14 +206,12 @@ def test_basics(monkeypatch):
 
     # C.2) Album existence test (2 pts)
     try:
-        state = {
-            "messages": [HumanMessage("How many albums exist?")]
-        }
+        state = TEST_STATES["c_2"]
         out = app.invoke(state)
         with open("txt_dump/album_existence_test.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = "347" in response
         if ok:
             db_integrity_score += 2
@@ -223,14 +222,12 @@ def test_basics(monkeypatch):
 
     # C.3) Highest track price test (2 pts)
     try:
-        state = {
-            "messages": [HumanMessage("What's the highest track price?")]
-        }
+        state = TEST_STATES["c_3"]
         out = app.invoke(state)
         with open("txt_dump/highest_price_test.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = "1.99" in response
         if ok:
             db_integrity_score += 2
@@ -245,16 +242,14 @@ def test_basics(monkeypatch):
     if db_integrity_failures:
         failures.extend(db_integrity_failures)
 
-    # D) Simple query with processing
+    # D.1) Simple query with processing
     try:
-        state = {
-            "messages": [HumanMessage("What's the average invoice total per country, excluding countries with less than 5 invoices?")]    
-        }
+        state = TEST_STATES["d_1"]
         out = app.invoke(state)
         with open("txt_dump/simple_query_with_processing.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok, reasoning = __llm_as_judge(response, "The average invoice total per country, excluding countries with less than 5 invoices.")
         _add(score, 2, "simple_query_with_processing", ok,
              f"response: {response}\nreasoning: {reasoning}")
@@ -265,15 +260,13 @@ def test_basics(monkeypatch):
         failures.append(f"Simple query with processing failed: {e}")
 
 
-    # D) JOIN query tests (4 pts total)
+    # E) JOIN query tests (4 pts total)
     join_score = 0
     join_failures = []
     
-    # D.1) Multi-table customer search (2 pts)
+    # E.1) Multi-table customer search (2 pts)
     try:
-        state = {
-            "messages": [HumanMessage("Which customers bought tracks by Metallica? I want a list of all the customers.")]
-        }
+        state = TEST_STATES["e_1"]
         customers = [
             "Leonie Köhler",
             "Phil Hughes", 
@@ -307,7 +300,7 @@ def test_basics(monkeypatch):
         with open("txt_dump/metallica_customers_test.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = all(customer in response for customer in customers)
         if ok:
             join_score += 2
@@ -316,16 +309,14 @@ def test_basics(monkeypatch):
     except Exception as e:
         join_failures.append(f"Metallica customers test failed: {e}")
 
-    # D.2) Complex aggregation with JOINs (2 pts)
+    # E.2) Complex aggregation with JOINs (2 pts)
     try:
-        state = {
-            "messages": [HumanMessage("Which sales rep has the highest business revenue and how much?")]
-        }
+        state = TEST_STATES["e_2"]
         out = app.invoke(state)
         with open("txt_dump/top_sales_rep_test.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = "Jane Peacock" in response and "833.04" in response
         if ok:
             join_score += 2
@@ -340,11 +331,9 @@ def test_basics(monkeypatch):
     if join_failures:
         failures.extend(join_failures) 
 
-    # E) Date range query test
+    # F.1) Date range query test
     try:
-        state = {
-            "messages": [HumanMessage("Which employees were hired between 2002 and 2003?")]
-        }
+        state = TEST_STATES["f_1"]
         employees = [
             "Andrew Adams",
             "Nancy Edwards", 
@@ -355,7 +344,7 @@ def test_basics(monkeypatch):
         with open("txt_dump/date_range_query_test.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = all(employee in response for employee in employees)
         _add(score, 2, "date_range_query_test", ok,
              f"response: {response}" if ok else "response does not contain all employees")
@@ -365,16 +354,14 @@ def test_basics(monkeypatch):
         _add(score, 2, "date_range_query_test", False, f"invoke failed: {type(e).__name__}: {e}")
         failures.append(f"Date range query test failed: {e}")
 
-    # F) Reject irrelevant queries
+    # F.2) Reject irrelevant queries
     try:
-        state = {
-            "messages": [HumanMessage("Who won the world cup in 2022?")]
-        }
+        state = TEST_STATES["f_2"]
         out = app.invoke(state)
         with open("txt_dump/reject_irrelevant_queries.txt", "w") as f:
             f.write(str(out))
         #response = out["messages"][-1].content
-        response = out["messages"][-1].content
+        response = _out_parser(out)
         ok = "don't know" in response.lower()
         _add(score, 2, "reject_irrelevant_queries", ok,
              f"response: {response}" if ok else f"response: {response}. It does not contain 'don't know'")

@@ -4,6 +4,7 @@
 __pycache__/
 evals/txt_dump/
 
-**.pyc
+*.py[cod]
 
 expert_src/__pycache__/
+tests/__pycache__/**

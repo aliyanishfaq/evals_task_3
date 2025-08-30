@@ -8,20 +8,11 @@ import pathlib
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import subprocess
-from test_utils.initial_state import INITIAL_STATE
+from test_utils.test_state import INITIAL_STATE
+from test_utils.git_branch import get_git_branch
 
 
-def get_git_branch():
-    """Get the current git branch name"""
-    try:
-        result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
-                              capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raise Exception("Failed to get git branch name")
-
-
-DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../main.py"
+DEFAULT_AGENT_PATH = pathlib.Path.cwd() / "../text_to_sql_agent.py"
 CANDIDATE_NAME = get_git_branch()
 
 

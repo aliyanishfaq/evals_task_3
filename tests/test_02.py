@@ -12,7 +12,7 @@ from test_utils.graph_dist import compute_graph_distances
 # Use git branch name as candidate name, with fallback to env var
 CANDIDATE_NAME = get_git_branch()
 EXPERT_SRC_PATH = pathlib.Path("expert_src").resolve()
-CANDIDATE_AGENT_PATH = os.getenv("CANDIDATE_AGENT_PATH", "../main.py").strip()
+CANDIDATE_AGENT_PATH = os.getenv("CANDIDATE_AGENT_PATH", "../text_to_sql_agent.py").strip()
 
 def _write_score(score):
     out = pathlib.Path("results")
@@ -82,7 +82,7 @@ def test_graph_distance():
         
         # Calculate score based on the formula
         MAX_PTS = 5
-        D_CAP = 10
+        D_CAP = 5
         
         points = max(0, round(MAX_PTS * (1 - min(distance, D_CAP) / D_CAP)))
         print(f"Score: {points}/{MAX_PTS} points")

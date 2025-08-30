@@ -1,5 +1,5 @@
 {
-  "candidate": "main",
+  "candidate": "claude-code-vanilla-2",
   "bucket": "smoke",
   "points": 5,
   "max_points": 10,
