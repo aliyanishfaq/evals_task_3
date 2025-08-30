@@ -4,20 +4,12 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel
 from typing import cast, List, Literal
 from test_utils.prompt import LLM_AS_A_JUDGE_PROMPT, USER_TASK, EXPERT_CODE
-import subprocess
-
-def get_git_branch():
-    """Get the current git branch name"""
-    try:
-        result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
-                              capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "unknown"
+from test_utils.format_code import folder_to_prompt_string
+from test_utils.git_branch import get_git_branch
 
 CANDIDATE_NAME = get_git_branch()
 LLM_AS_JUDGE_MODEL = "claude-sonnet-4-20250514"
-CANDIDATE_AGENT_PATH = os.getenv("CANDIDATE_AGENT_PATH", "../agent.py").strip()
+CODE_FOLDER = [pathlib.Path("../")]
 
 class LlmAsJudgeEvidence(BaseModel):
     issue: str
@@ -79,10 +71,9 @@ def _calculate_score(evidence_list: List[LlmAsJudgeEvidence], max_points: int) -
 
 def test_best_practices_llm_judge():
     score = {"candidate": CANDIDATE_NAME, "bucket": "code_quality", "points": 0, "max_points": 20, "details": []}
-    with open(CANDIDATE_AGENT_PATH, 'r') as f:
-        user_code = f.read()
+    user_code = folder_to_prompt_string(CODE_FOLDER)
 
-    with open('user_code.txt', 'w') as f:
+    with open('txt_dump/user_code.txt', 'w') as f:
         f.write(user_code)
 
     # Prompt the judge with task-specific guidelines

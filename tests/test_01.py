@@ -8,24 +8,14 @@ import hashlib
 import urllib.parse
 import pytest
 from langchain_core.messages import HumanMessage
-import subprocess
 from test_utils.initial_state import INITIAL_STATE
 from pydantic import BaseModel
 from langchain_anthropic import ChatAnthropic
+from test_utils.git_branch import get_git_branch
 
 class LLMBinaryJudge(BaseModel):
     match: bool
     reasoning: str
-
-
-def get_git_branch():
-    """Get the current git branch name"""
-    try:
-        result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
-                              capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raise Exception("Failed to get git branch name")
 
 
 CANDIDATE_NAME = get_git_branch()
@@ -201,9 +191,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("how many artists are there?")]
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/artist_count_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        response = out["messages"][-1].content
+
         ok = "275" in response
         if ok:
             db_integrity_score += 2
@@ -218,9 +209,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("How many albums exist?")]
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/album_existence_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = "347" in response
         if ok:
             db_integrity_score += 2
@@ -235,9 +227,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("What's the highest track price?")]
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/highest_price_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = "1.99" in response
         if ok:
             db_integrity_score += 2
@@ -258,9 +251,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("What's the average invoice total per country, excluding countries with less than 5 invoices?")]    
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/simple_query_with_processing.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok, reasoning = __llm_as_judge(response, "The average invoice total per country, excluding countries with less than 5 invoices.")
         _add(score, 2, "simple_query_with_processing", ok,
              f"response: {response}\nreasoning: {reasoning}")
@@ -310,9 +304,10 @@ def test_basics(monkeypatch):
             "Martha Silk"
         ]
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/metallica_customers_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = all(customer in response for customer in customers)
         if ok:
             join_score += 2
@@ -327,9 +322,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("Which sales rep has the highest business revenue and how much?")]
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/top_sales_rep_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = "Jane Peacock" in response and "833.04" in response
         if ok:
             join_score += 2
@@ -356,9 +352,10 @@ def test_basics(monkeypatch):
             "Margaret Park"
         ]
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/date_range_query_test.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = all(employee in response for employee in employees)
         _add(score, 2, "date_range_query_test", ok,
              f"response: {response}" if ok else "response does not contain all employees")
@@ -374,9 +371,10 @@ def test_basics(monkeypatch):
             "messages": [HumanMessage("Who won the world cup in 2022?")]
         }
         out = app.invoke(state)
-        response = out["messages"][-1].content
         with open("txt_dump/reject_irrelevant_queries.txt", "w") as f:
-            f.write(str(response))
+            f.write(str(out))
+        #response = out["messages"][-1].content
+        response = out["messages"][-1].content
         ok = "don't know" in response.lower()
         _add(score, 2, "reject_irrelevant_queries", ok,
              f"response: {response}" if ok else f"response: {response}. It does not contain 'don't know'")

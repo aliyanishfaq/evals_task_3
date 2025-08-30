@@ -4,18 +4,10 @@ import json
 import pathlib
 import pytest
 import sys
-import subprocess
+from test_utils.git_branch import get_git_branch
 
 from test_utils.graph_dist import compute_graph_distances
 
-def get_git_branch():
-    """Get the current git branch name"""
-    try:
-        result = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
-                              capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "unknown"
 
 # Use git branch name as candidate name, with fallback to env var
 CANDIDATE_NAME = get_git_branch()

@@ -1,0 +1,68 @@
+{
+  "candidate": "claude-code-vanilla-1",
+  "bucket": "code_quality",
+  "points": 16,
+  "max_points": 20,
+  "details": [
+    {
+      "key": "code_quality_check",
+      "points": 0,
+      "passed": false,
+      "msg": "[LlmAsJudgeEvidence(issue=\"Uses complex conditional edges and error handling nodes instead of expert's simple linear pipeline (generate_sql \u2192 execute_sql \u2192 generate_answer)\", severity='major'), LlmAsJudgeEvidence(issue=\"Uses custom dataclass AgentState instead of expert's TypedDict with message-based state management\", severity='major'), LlmAsJudgeEvidence(issue=\"Implements custom database class instead of using LangChain's SQLDatabase utility like the expert\", severity='minor'), LlmAsJudgeEvidence(issue=\"Uses different LLM model (gpt-4-turbo-preview) instead of expert's gpt-4o-mini\", severity='minor'), LlmAsJudgeEvidence(issue='Does not return AIMessage objects as required, returns plain strings instead', severity='major')]"
+    },
+    {
+      "key": "code_correctness_check",
+      "points": 8,
+      "passed": true,
+      "msg": "[]"
+    },
+    {
+      "key": "database_initialization",
+      "points": 1,
+      "passed": true,
+      "msg": "Database initialization is present"
+    },
+    {
+      "key": "schema_extraction",
+      "points": 1,
+      "passed": true,
+      "msg": "Schema extraction is present"
+    },
+    {
+      "key": "sql_generation",
+      "points": 1,
+      "passed": true,
+      "msg": "SQL generation is present"
+    },
+    {
+      "key": "query_execution",
+      "points": 1,
+      "passed": true,
+      "msg": "Query execution is present"
+    },
+    {
+      "key": "natural_language_response",
+      "points": 1,
+      "passed": true,
+      "msg": "Natural language response is present"
+    },
+    {
+      "key": "irrelevant_query_handling",
+      "points": 1,
+      "passed": true,
+      "msg": "Irrelevant query handling is present"
+    },
+    {
+      "key": "separation_of_concerns",
+      "points": 1,
+      "passed": true,
+      "msg": "Separation of concerns is present"
+    },
+    {
+      "key": "error_handling",
+      "points": 1,
+      "passed": true,
+      "msg": "Error handling is present"
+    }
+  ]
+}

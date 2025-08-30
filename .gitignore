@@ -1,0 +1,9 @@
+.DS_Store
+.env
+.pytest_cache/
+__pycache__/
+evals/txt_dump/
+
+**.pyc
+
+expert_src/__pycache__/
