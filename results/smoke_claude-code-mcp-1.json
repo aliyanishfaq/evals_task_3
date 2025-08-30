@@ -1,0 +1,32 @@
+{
+  "candidate": "claude-code-mcp-1",
+  "bucket": "smoke",
+  "points": 5,
+  "max_points": 10,
+  "details": [
+    {
+      "key": "compile",
+      "points": 2,
+      "passed": true,
+      "msg": "compiled app must expose .invoke"
+    },
+    {
+      "key": "invoke_accepts_canonical_state",
+      "points": 2,
+      "passed": true,
+      "msg": ""
+    },
+    {
+      "key": "output_is_dict",
+      "points": 1,
+      "passed": true,
+      "msg": "output must be a dict"
+    },
+    {
+      "key": "messages_non_empty_list",
+      "points": 0,
+      "passed": false,
+      "msg": "messages must be a non-empty list"
+    }
+  ]
+}

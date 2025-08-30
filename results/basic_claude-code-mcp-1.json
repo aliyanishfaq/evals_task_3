@@ -1,0 +1,50 @@
+{
+  "candidate": "claude-code-mcp-1",
+  "bucket": "basic",
+  "points": 14,
+  "max_points": 22,
+  "details": [
+    {
+      "key": "config_validate",
+      "points": 0,
+      "passed": false,
+      "msg": "FileNotFoundError: Missing /Users/aliyan/Documents/blog_post_v2/claude_task_2/evals/../langgraph.json"
+    },
+    {
+      "key": "llm_network_call",
+      "points": 2,
+      "passed": true,
+      "msg": ""
+    },
+    {
+      "key": "database_integrity_tests",
+      "points": 6,
+      "passed": true,
+      "msg": "Passed 6/6 points"
+    },
+    {
+      "key": "simple_query_with_processing",
+      "points": 2,
+      "passed": true,
+      "msg": "response: The average invoice total varies by country. For countries with at least 5 invoices, the highest average invoice total is in Chile with $6.66. This is followed by Ireland and Hungary, both with an average invoice total of $6.52. The Czech Republic comes next with $6.45, then Austria with $6.09, and Finland with $5.95. The Netherlands has an average invoice total of $5.80, India's is $5.79, the USA's is $5.75, and Norway's is $5.66. In total, there are 24 countries that have 5 or more invoices.\nreasoning: The Expected response asks for \"The average invoice total per country, excluding countries with less than 5 invoices.\" The Test response fully covers this requirement by:\n\n1. Explicitly stating the filtering criteria: \"For countries with at least 5 invoices\" (which is equivalent to excluding countries with less than 5 invoices)\n2. Providing specific average invoice totals for multiple countries that meet this criteria\n3. Listing the countries in order from highest to lowest average invoice total\n4. Including additional context that there are 24 countries total that meet the criteria\n\nThe Test response goes beyond the minimal requirement by providing detailed data and rankings, but it completely covers what was asked for in the Expected response. The core information requested (average invoice totals per country, filtered to exclude countries with fewer than 5 invoices) is fully present and accurate."
+    },
+    {
+      "key": "join_query_tests",
+      "points": 2,
+      "passed": true,
+      "msg": "Passed 2/4 points"
+    },
+    {
+      "key": "date_range_query_test",
+      "points": 2,
+      "passed": true,
+      "msg": "response: The employees who were hired between 2002 and 2003 are:\n\n1. Andrew Adams, who was hired on August 14, 2002, and currently serves as the General Manager.\n2. Nancy Edwards, hired on May 1, 2002, and is the Sales Manager.\n3. Jane Peacock, who started on April 1, 2002, and works as a Sales Support Agent.\n4. Margaret Park, who joined the team on May 3, 2003, as a Sales Support Agent.\n5. Steve Johnson, hired on October 17, 2003, and also works as a Sales Support Agent.\n6. Michael Mitchell, who started on October 17, 2003, and is the IT Manager.\n\nSo, a total of 6 employees were hired between 2002 and 2003."
+    },
+    {
+      "key": "reject_irrelevant_queries",
+      "points": 0,
+      "passed": false,
+      "msg": "invoke failed: KeyError: 'query_results'"
+    }
+  ]
+}
