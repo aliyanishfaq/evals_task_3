@@ -12,7 +12,7 @@ LLM_AS_JUDGE_MODEL = "claude-sonnet-4-20250514"
 CODE_FOLDER = [pathlib.Path("../")]
 
 HUMAN_NOTES = """
-1. Local/Deployed Testing: Uses the outdated Claude model: claude-3-sonnet-20240229. This doesnt let the code to be run.
+1. Local/Deployed Testing: At line 184 of agent.py, the message should be HumanMessage instead of SystemMessage. Otherwise, Anthropic throws an error.
 """
 
 class LlmAsJudgeEvidence(BaseModel):

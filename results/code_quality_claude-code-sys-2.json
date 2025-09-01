@@ -1,0 +1,68 @@
+{
+  "candidate": "claude-code-sys-2",
+  "bucket": "code_quality",
+  "points": 16,
+  "max_points": 20,
+  "details": [
+    {
+      "key": "code_quality_check",
+      "points": 0,
+      "passed": false,
+      "msg": "[LlmAsJudgeEvidence(issue='Uses local database file (chinook_schema.sql) instead of fetching from remote URL as specified in requirements', severity='critical'), LlmAsJudgeEvidence(issue=\"Overly complex architecture with unnecessary structured output, conditional edges, and multiple state management compared to expert's simple linear pipeline\", severity='major'), LlmAsJudgeEvidence(issue='Redundant database manager class with extensive schema extraction when expert uses simpler direct database integration', severity='major'), LlmAsJudgeEvidence(issue='Uses Anthropic Claude model instead of OpenAI as shown in expert implementation', severity='minor')]"
+    },
+    {
+      "key": "code_correctness_check",
+      "points": 8,
+      "passed": true,
+      "msg": "[]"
+    },
+    {
+      "key": "database_initialization",
+      "points": 1,
+      "passed": true,
+      "msg": "Database initialization is present"
+    },
+    {
+      "key": "schema_extraction",
+      "points": 1,
+      "passed": true,
+      "msg": "Schema extraction is present"
+    },
+    {
+      "key": "sql_generation",
+      "points": 1,
+      "passed": true,
+      "msg": "SQL generation is present"
+    },
+    {
+      "key": "query_execution",
+      "points": 1,
+      "passed": true,
+      "msg": "Query execution is present"
+    },
+    {
+      "key": "natural_language_response",
+      "points": 1,
+      "passed": true,
+      "msg": "Natural language response is present"
+    },
+    {
+      "key": "irrelevant_query_handling",
+      "points": 1,
+      "passed": true,
+      "msg": "Irrelevant query handling is present"
+    },
+    {
+      "key": "separation_of_concerns",
+      "points": 1,
+      "passed": true,
+      "msg": "Separation of concerns is present"
+    },
+    {
+      "key": "error_handling",
+      "points": 1,
+      "passed": true,
+      "msg": "Error handling is present"
+    }
+  ]
+}

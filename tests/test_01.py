@@ -70,7 +70,7 @@ def __llm_as_judge(test_response, expected_response):
     return response.match, response.reasoning
 
 def _out_parser(out):
-    return out["final_response"]
+    return out["messages"][-1].content
 
 LLM_HOST_ALLOWLIST = [
     "api.openai.com",
