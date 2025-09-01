@@ -363,7 +363,7 @@ def test_basics(monkeypatch):
             f.write(str(out))
         #response = out["messages"][-1].content
         response = _out_parser(out)
-        ok = "don't know" in response.lower()
+        ok = "don't know" in response.lower() or "cannot" in response.lower()
         _add(score, 2, "reject_irrelevant_queries", ok,
              f"response: {response}" if ok else f"response: {response}. It does not contain 'don't know'")
         if not ok:

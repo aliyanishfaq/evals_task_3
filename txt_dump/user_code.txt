@@ -6,212 +6,325 @@ File Content:
 
 import sqlite3
 import requests
-import os
-from dotenv import load_dotenv
-from typing import TypedDict, List
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
+from typing import Dict, Any, List
+from pydantic import BaseModel, Field
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from langchain_anthropic import ChatAnthropic
-from langgraph.graph import StateGraph, START, END
-from pydantic import BaseModel
-
-# Load environment variables
-load_dotenv()
-
-
-class SQLQuery(BaseModel):
-    query: str
-    explanation: str
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 
 
-class State(TypedDict):
-    messages: List[BaseMessage]
-    sql_query: str
-    sql_result: str
-    schema_info: str
+class SqlQuery(BaseModel):
+    """Structured output for SQL query generation"""
+    query: str = Field(description="The SQL query to execute")
+    reasoning: str = Field(description="Explanation of why this query answers the question")
 
 
-def setup_chinook_db():
-    """Download and setup the Chinook SQLite database in memory"""
-    # Download the SQL script
-    response = requests.get("https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql")
-    sql_script = response.text
+class DatabaseSchema:
+    """Manages the Chinook database schema and connection"""
     
-    # Create in-memory database
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(sql_script)
+    def __init__(self):
+        self.connection = None
+        self.schema_info = self._get_schema_info()
+        self._setup_database()
     
-    return conn
+    def _setup_database(self):
+        """Download and setup the Chinook database in memory"""
+        try:
+            # Fetch the SQL script
+            response = requests.get("https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql")
+            response.raise_for_status()
+            sql_script = response.text
+            
+            # Create in-memory database
+            self.connection = sqlite3.connect(":memory:")
+            self.connection.executescript(sql_script)
+            self.connection.commit()
+            
+        except Exception as e:
+            raise Exception(f"Failed to setup Chinook database: {e}")
+    
+    def _get_schema_info(self) -> str:
+        """Returns detailed schema information for the AI model"""
+        return """
+CHINOOK DATABASE SCHEMA:
+
+Tables and Relationships:
+
+1. Artist
+   - ArtistId (INTEGER, PRIMARY KEY)
+   - Name (NVARCHAR)
+
+2. Album  
+   - AlbumId (INTEGER, PRIMARY KEY)
+   - Title (NVARCHAR)
+   - ArtistId (INTEGER, FOREIGN KEY -> Artist.ArtistId)
+
+3. Track
+   - TrackId (INTEGER, PRIMARY KEY)
+   - Name (NVARCHAR)
+   - AlbumId (INTEGER, FOREIGN KEY -> Album.AlbumId)
+   - MediaTypeId (INTEGER, FOREIGN KEY -> MediaType.MediaTypeId)
+   - GenreId (INTEGER, FOREIGN KEY -> Genre.GenreId)
+   - Composer (NVARCHAR)
+   - Milliseconds (INTEGER)
+   - Bytes (INTEGER) 
+   - UnitPrice (NUMERIC)
+
+4. Genre
+   - GenreId (INTEGER, PRIMARY KEY)
+   - Name (NVARCHAR)
+
+5. MediaType
+   - MediaTypeId (INTEGER, PRIMARY KEY)
+   - Name (NVARCHAR)
+
+6. Playlist
+   - PlaylistId (INTEGER, PRIMARY KEY)
+   - Name (NVARCHAR)
+
+7. PlaylistTrack
+   - PlaylistId (INTEGER, FOREIGN KEY -> Playlist.PlaylistId)
+   - TrackId (INTEGER, FOREIGN KEY -> Track.TrackId)
+
+8. Customer
+   - CustomerId (INTEGER, PRIMARY KEY)
+   - FirstName (NVARCHAR)
+   - LastName (NVARCHAR)
+   - Company (NVARCHAR)
+   - Address (NVARCHAR)
+   - City (NVARCHAR)
+   - State (NVARCHAR)
+   - Country (NVARCHAR)
+   - PostalCode (NVARCHAR)
+   - Phone (NVARCHAR)
+   - Fax (NVARCHAR)
+   - Email (NVARCHAR)
+   - SupportRepId (INTEGER, FOREIGN KEY -> Employee.EmployeeId)
+
+9. Employee
+   - EmployeeId (INTEGER, PRIMARY KEY)
+   - LastName (NVARCHAR)
+   - FirstName (NVARCHAR)
+   - Title (NVARCHAR)
+   - ReportsTo (INTEGER, FOREIGN KEY -> Employee.EmployeeId)
+   - BirthDate (DATETIME)
+   - HireDate (DATETIME)
+   - Address (NVARCHAR)
+   - City (NVARCHAR)
+   - State (NVARCHAR)
+   - Country (NVARCHAR)
+   - PostalCode (NVARCHAR)
+   - Phone (NVARCHAR)
+   - Fax (NVARCHAR)
+   - Email (NVARCHAR)
+
+10. Invoice
+    - InvoiceId (INTEGER, PRIMARY KEY)
+    - CustomerId (INTEGER, FOREIGN KEY -> Customer.CustomerId)
+    - InvoiceDate (DATETIME)
+    - BillingAddress (NVARCHAR)
+    - BillingCity (NVARCHAR)
+    - BillingState (NVARCHAR)
+    - BillingCountry (NVARCHAR)
+    - BillingPostalCode (NVARCHAR)
+    - Total (NUMERIC)
+
+11. InvoiceLine
+    - InvoiceLineId (INTEGER, PRIMARY KEY)
+    - InvoiceId (INTEGER, FOREIGN KEY -> Invoice.InvoiceId)
+    - TrackId (INTEGER, FOREIGN KEY -> Track.TrackId)
+    - UnitPrice (NUMERIC)
+    - Quantity (INTEGER)
+
+Key Business Relationships:
+- Artists have Albums, Albums have Tracks
+- Customers make Purchases (Invoices) containing InvoiceLines
+- Tracks belong to Genres and MediaTypes
+- Employees can be assigned as Support Representatives to Customers
+- Playlists contain multiple Tracks through PlaylistTrack junction table
+"""
+
+    def execute_query(self, query: str) -> List[Dict[str, Any]]:
+        """Execute SQL query and return results as list of dictionaries"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(query)
+            columns = [description[0] for description in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(zip(columns, row)))
+            return results
+        except Exception as e:
+            raise Exception(f"SQL execution error: {e}")
 
 
-def get_schema_info(conn):
-    """Get detailed schema information for the database"""
-    cursor = conn.cursor()
+# Initialize database
+db = DatabaseSchema()
+
+@tool
+def execute_sql_query(query: str) -> str:
+    """Execute a SQL query against the Chinook database and return results.
     
-    # Get all table names
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = cursor.fetchall()
-    
-    schema_info = "Database Schema Information:\n\n"
-    
-    for table in tables:
-        table_name = table[0]
-        schema_info += f"Table: {table_name}\n"
+    Args:
+        query: The SQL query to execute
         
-        # Get column information
-        cursor.execute(f"PRAGMA table_info({table_name});")
-        columns = cursor.fetchall()
-        
-        for col in columns:
-            col_name = col[1]
-            col_type = col[2]
-            is_pk = col[5]
-            not_null = col[3]
-            pk_indicator = " (PRIMARY KEY)" if is_pk else ""
-            null_indicator = " NOT NULL" if not_null else ""
-            schema_info += f"  - {col_name}: {col_type}{pk_indicator}{null_indicator}\n"
-        
-        # Get foreign key information
-        cursor.execute(f"PRAGMA foreign_key_list({table_name});")
-        fks = cursor.fetchall()
-        
-        for fk in fks:
-            from_col = fk[3]
-            to_table = fk[2]
-            to_col = fk[4]
-            schema_info += f"  - {from_col} -> {to_table}.{to_col} (FOREIGN KEY)\n"
-        
-        schema_info += "\n"
-    
-    return schema_info
-
-
-# Initialize database connection (global for this example)
-db_conn = setup_chinook_db()
-SCHEMA_INFO = get_schema_info(db_conn)
-
-# Initialize the model
-model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
-sql_model = model.with_structured_output(SQLQuery)
-
-
-def generate_sql_node(state: State) -> dict:
-    """Generate SQL query from natural language question"""
-    
-    user_question = state["messages"][-1].content
-    
-    system_prompt = f"""You are a SQL expert working with a music store database called Chinook.
-
-{SCHEMA_INFO}
-
-Your task is to convert natural language questions into SQL queries. Follow these rules:
-1. Only generate queries that can be answered using the database schema above
-2. If the question cannot be answered with the available data, return an empty query string
-3. Use proper SQL syntax and table/column names exactly as shown in the schema
-4. Provide a brief explanation of what the query does
-5. Focus only on SELECT queries for data retrieval
-
-Question: {user_question}"""
-    
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_question)]
-    result = sql_model.invoke(messages)
-    
-    return {
-        "sql_query": result.query,
-        "messages": state["messages"] + [AIMessage(content=f"Generated SQL: {result.query}\nExplanation: {result.explanation}")]
-    }
-
-
-def execute_sql_node(state: State) -> dict:
-    """Execute the generated SQL query"""
-    
-    if not state["sql_query"]:
-        return {
-            "sql_result": "No query to execute - question cannot be answered with available data",
-            "messages": state["messages"] + [AIMessage(content="I don't know the answer to that question based on the available data.")]
-        }
-    
+    Returns:
+        String representation of query results
+    """
     try:
-        cursor = db_conn.cursor()
-        cursor.execute(state["sql_query"])
-        results = cursor.fetchall()
-        
-        # Get column names for better formatting
-        column_names = [description[0] for description in cursor.description]
-        
+        results = db.execute_query(query)
         if not results:
-            result_text = "No results found"
+            return "No results found."
+        
+        # Format results for display
+        if len(results) == 1:
+            return f"Result: {results[0]}"
         else:
-            # Format results as a readable string
-            result_text = f"Columns: {', '.join(column_names)}\n"
-            result_text += f"Results ({len(results)} rows):\n"
-            for row in results[:10]:  # Limit to first 10 rows for readability
-                result_text += f"  {row}\n"
+            formatted_results = []
+            for i, result in enumerate(results[:10]):  # Limit to first 10 results
+                formatted_results.append(f"{i+1}. {result}")
+            
+            result_str = "\n".join(formatted_results)
             if len(results) > 10:
-                result_text += f"  ... and {len(results) - 10} more rows"
-        
-        return {
-            "sql_result": result_text,
-            "messages": state["messages"] + [AIMessage(content=f"SQL executed successfully. Found {len(results)} results.")]
-        }
-        
+                result_str += f"\n... and {len(results) - 10} more results"
+            
+            return result_str
+            
     except Exception as e:
-        error_msg = f"SQL Error: {str(e)}"
-        return {
-            "sql_result": error_msg,
-            "messages": state["messages"] + [AIMessage(content="I encountered an error executing the SQL query.")]
+        return f"Error executing query: {str(e)}"
+
+
+def create_text_to_sql_agent():
+    """Create a text-to-SQL agent using LangGraph"""
+    
+    # Initialize the model
+    model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+    
+    # Create system prompt with schema information
+    system_prompt = f"""You are a text-to-SQL assistant for the Chinook music database. Your job is to:
+
+1. Convert natural language questions into SQL queries
+2. Execute those queries against the database  
+3. Provide natural language responses based on the results
+
+{db.schema_info}
+
+IMPORTANT RULES:
+- ONLY answer questions that can be answered using the Chinook database
+- If a question cannot be answered with the available data, respond: "I don't know the answer to that question."
+- Always use proper SQL syntax for SQLite
+- Be precise with table and column names
+- Use JOINs when querying across multiple tables
+- Limit results to reasonable numbers (use LIMIT clause when appropriate)
+- Provide clear, natural language explanations of your findings
+
+When you receive a question:
+1. Determine if it can be answered using the Chinook database
+2. If yes, generate and execute the appropriate SQL query using the execute_sql_query tool
+3. Interpret the results and provide a natural language response
+4. If no, respond that you don't know the answer"""
+
+    # Create the agent using prebuilt create_react_agent
+    agent = create_react_agent(
+        model=model,
+        tools=[execute_sql_query],
+        prompt=system_prompt
+    )
+    
+    return agent
+
+
+# Create and export the app
+app = create_text_to_sql_agent()
+
+
+
+File Name: demo.py
+
+-----------------------------
+
+File Content: 
+
+#!/usr/bin/env python3
+
+from agent import db, execute_sql_query
+
+def demonstrate_sql_capabilities():
+    """Demonstrate the SQL generation and execution capabilities"""
+    
+    print("🎵 Chinook Database Text-to-SQL Agent Demo 🎵")
+    print("=" * 50)
+    
+    # Sample natural language questions and their corresponding SQL
+    demonstrations = [
+        {
+            "question": "How many artists are in the database?",
+            "sql": "SELECT COUNT(*) as artist_count FROM Artist",
+            "explanation": "Simple count query to get total number of artists"
+        },
+        {
+            "question": "What are the top 5 most expensive tracks?",
+            "sql": "SELECT Name, UnitPrice FROM Track ORDER BY UnitPrice DESC LIMIT 5",
+            "explanation": "Query to find tracks with highest unit price"
+        },
+        {
+            "question": "Which rock albums are available?",
+            "sql": """SELECT DISTINCT a.Title, ar.Name as Artist 
+                     FROM Album a 
+                     JOIN Artist ar ON a.ArtistId = ar.ArtistId
+                     JOIN Track t ON a.AlbumId = t.AlbumId
+                     JOIN Genre g ON t.GenreId = g.GenreId 
+                     WHERE g.Name = 'Rock' 
+                     LIMIT 10""",
+            "explanation": "Complex join to find rock albums using genre information"
+        },
+        {
+            "question": "What are all the available genres?",
+            "sql": "SELECT Name FROM Genre ORDER BY Name",
+            "explanation": "Simple query to list all music genres"
+        },
+        {
+            "question": "Which customers are from Canada?",
+            "sql": "SELECT FirstName, LastName, City FROM Customer WHERE Country = 'Canada'",
+            "explanation": "Filter customers by country"
         }
-
-
-def generate_response_node(state: State) -> dict:
-    """Generate natural language response based on SQL results"""
+    ]
     
-    if "don't know" in state["messages"][-1].content.lower():
-        return {
-            "messages": state["messages"] + [AIMessage(content="I don't know the answer to that question.")]
-        }
+    for i, demo in enumerate(demonstrations, 1):
+        print(f"\n📝 Example {i}: {demo['question']}")
+        print(f"💡 SQL Translation: {demo['sql'].strip()}")
+        print(f"🔍 Explanation: {demo['explanation']}")
+        print("📊 Results:")
+        
+        try:
+            result = execute_sql_query.func(demo['sql'].strip())
+            print(f"   {result}")
+        except Exception as e:
+            print(f"   Error: {e}")
+        
+        print("-" * 50)
     
-    user_question = None
-    for msg in state["messages"]:
-        if isinstance(msg, HumanMessage):
-            user_question = msg.content
-            break
+    print("\n✅ Database Statistics:")
+    print(f"   • Artists: {len(db.execute_query('SELECT * FROM Artist'))}")
+    print(f"   • Albums: {len(db.execute_query('SELECT * FROM Album'))}")
+    print(f"   • Tracks: {len(db.execute_query('SELECT * FROM Track'))}")
+    print(f"   • Genres: {len(db.execute_query('SELECT * FROM Genre'))}")
+    print(f"   • Customers: {len(db.execute_query('SELECT * FROM Customer'))}")
     
-    system_prompt = f"""You are a helpful assistant that provides natural language answers based on SQL query results.
+    print("\n🚀 To use the full agent with natural language processing:")
+    print("   1. Set up your ANTHROPIC_API_KEY in .env file")
+    print("   2. Run: python test_agent.py")
+    print("\n💡 The agent will automatically:")
+    print("   • Convert natural language to SQL")
+    print("   • Execute queries safely")
+    print("   • Return natural language responses")
+    print("   • Handle irrelevant questions appropriately")
 
-Original question: {user_question}
-SQL Query: {state["sql_query"]}
-Query Results: {state["sql_result"]}
-
-Provide a clear, natural language answer to the original question based on the query results.
-Be concise and focus only on answering the question. Do not explain the SQL or database structure.
-If there were no results, explain that no data was found for the query.
-If there was an error, simply say you don't know the answer."""
-    
-    messages = [SystemMessage(content=system_prompt)]
-    result = model.invoke(messages)
-    
-    return {
-        "messages": state["messages"] + [AIMessage(content=result.content)]
-    }
-
-
-# Build the graph
-graph_builder = StateGraph(State)
-
-# Add nodes
-graph_builder.add_node("generate_sql", generate_sql_node)
-graph_builder.add_node("execute_sql", execute_sql_node)
-graph_builder.add_node("generate_response", generate_response_node)
-
-# Add edges
-graph_builder.add_edge(START, "generate_sql")
-graph_builder.add_edge("generate_sql", "execute_sql")
-graph_builder.add_edge("execute_sql", "generate_response")
-graph_builder.add_edge("generate_response", END)
-
-# Compile the graph
-graph = graph_builder.compile()
-app = graph
+if __name__ == "__main__":
+    demonstrate_sql_capabilities()
 
 
 
@@ -222,9 +335,16 @@ File Name: langgraph.json
 File Content: 
 
 {
-  "dependencies": ["."],
+  "dependencies": [
+    "langgraph",
+    "langchain-anthropic", 
+    "langchain-core",
+    "pydantic",
+    "requests",
+    "sqlite3"
+  ],
   "graphs": {
-    "agent": "./agent.py:app"
+    "text_to_sql_agent": "./agent.py:app"
   },
   "env": ".env"
 }
@@ -237,75 +357,88 @@ File Name: test_agent.py
 
 File Content: 
 
+#!/usr/bin/env python3
+
+import os
 from agent import app
-from langchain_core.messages import HumanMessage
 
 def test_agent():
-    """Test the text-to-SQL agent with sample queries"""
+    """Test the text-to-SQL agent with sample questions"""
     
-    # Test 1: Valid music-related query
-    print("=== Test 1: Artists and Albums ===")
-    result = app.invoke({"messages": [HumanMessage(content="How many albums does each artist have?")]})
-    print("Final response:", result["messages"][-1].content)
-    print()
+    test_questions = [
+        "How many artists are in the database?",
+        "What are the top 5 most expensive tracks?",
+        "Which customers are from the USA?",
+        "What is the weather like today?",  # Should respond with "I don't know"
+        "Show me all genres available in the database"
+    ]
     
-    # Test 2: Customer-related query
-    print("=== Test 2: Customer Information ===")
-    result = app.invoke({"messages": [HumanMessage(content="Which customers are from the USA?")]})
-    print("Final response:", result["messages"][-1].content)
-    print()
+    print("Testing Text-to-SQL Agent")
+    print("=" * 50)
     
-    # Test 3: Irrelevant query
-    print("=== Test 3: Irrelevant Query ===")
-    result = app.invoke({"messages": [HumanMessage(content="What's the weather like today?")]})
-    print("Final response:", result["messages"][-1].content)
-    print()
-    
-    # Test 4: Track information
-    print("=== Test 4: Track Information ===")
-    result = app.invoke({"messages": [HumanMessage(content="What are the top 5 longest tracks?")]})
-    print("Final response:", result["messages"][-1].content)
+    for i, question in enumerate(test_questions, 1):
+        print(f"\nTest {i}: {question}")
+        print("-" * 30)
+        
+        try:
+            # Invoke the agent
+            result = app.invoke({
+                "messages": [{"role": "user", "content": question}]
+            })
+            
+            # Extract the final response
+            if result and "messages" in result:
+                final_message = result["messages"][-1]
+                if hasattr(final_message, 'content'):
+                    print(f"Response: {final_message.content}")
+                else:
+                    print(f"Response: {final_message}")
+            else:
+                print(f"Unexpected result format: {result}")
+                
+        except Exception as e:
+            print(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     test_agent()
 
 
 
-File Name: test_db_setup.py
+File Name: test_database.py
 
 -----------------------------
 
 File Content: 
 
-from agent import setup_chinook_db, get_schema_info
+#!/usr/bin/env python3
+
+from agent import db, execute_sql_query
 
 def test_database_setup():
-    """Test the database setup without API calls"""
-    print("Setting up Chinook database...")
+    """Test that the Chinook database is properly set up"""
     
-    # Test database setup
-    conn = setup_chinook_db()
-    print("✓ Database setup successful")
+    print("Testing Chinook Database Setup")
+    print("=" * 40)
     
-    # Test schema extraction
-    schema = get_schema_info(conn)
-    print("✓ Schema extraction successful")
-    print("\nFirst 1000 characters of schema:")
-    print(schema[:1000])
+    test_queries = [
+        ("Count artists", "SELECT COUNT(*) as artist_count FROM Artist"),
+        ("Count albums", "SELECT COUNT(*) as album_count FROM Album"), 
+        ("Count tracks", "SELECT COUNT(*) as track_count FROM Track"),
+        ("Sample artists", "SELECT Name FROM Artist LIMIT 5"),
+        ("Sample genres", "SELECT Name FROM Genre LIMIT 5"),
+        ("Top tracks by price", "SELECT Name, UnitPrice FROM Track ORDER BY UnitPrice DESC LIMIT 3")
+    ]
     
-    # Test a simple query
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) as total_artists FROM Artist")
-    result = cursor.fetchone()
-    print(f"\n✓ Database query test: Found {result[0]} artists")
+    for description, query in test_queries:
+        print(f"\n{description}:")
+        print(f"Query: {query}")
+        try:
+            result = execute_sql_query.func(query)
+            print(f"Result: {result}")
+        except Exception as e:
+            print(f"Error: {e}")
     
-    cursor.execute("SELECT COUNT(*) as total_tracks FROM Track")  
-    result = cursor.fetchone()
-    print(f"✓ Database query test: Found {result[0]} tracks")
-    
-    cursor.execute("SELECT Name FROM Artist LIMIT 5")
-    artists = cursor.fetchall()
-    print(f"\n✓ Sample artists: {[artist[0] for artist in artists]}")
+    print(f"\nDatabase schema info available: {len(db.schema_info)} characters")
 
 if __name__ == "__main__":
     test_database_setup()

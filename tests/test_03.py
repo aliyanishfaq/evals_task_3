@@ -12,7 +12,7 @@ LLM_AS_JUDGE_MODEL = "claude-sonnet-4-20250514"
 CODE_FOLDER = [pathlib.Path("../")]
 
 HUMAN_NOTES = """
-1. Local/Deployed Testing: At line 184 of agent.py, the message should be HumanMessage instead of SystemMessage. Otherwise, Anthropic throws an error.
+1. Local/Deployed Testing: self.connection = self.connection = sqlite3.connect(":memory:") should be self.connection = sqlite3.connect(":memory:", check_same_thread=False) to work with tool calling. Right now, the SQL does not return results because of it.
 """
 
 class LlmAsJudgeEvidence(BaseModel):

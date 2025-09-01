@@ -1,0 +1,14 @@
+{
+  "candidate": "claude-code-sys+mcp-1",
+  "bucket": "graph_dist",
+  "points": 0,
+  "max_points": 5,
+  "details": [
+    {
+      "key": "graph_distance",
+      "points": 0,
+      "passed": true,
+      "msg": "Edit distance: 5.0"
+    }
+  ]
+}
