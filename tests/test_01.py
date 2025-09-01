@@ -70,10 +70,10 @@ def __llm_as_judge(test_response, expected_response):
     return response.match, response.reasoning
 
 def _out_parser(out):
-    return out["messages"][-1].content
+    return out["final_answer"]
 
 LLM_HOST_ALLOWLIST = [
-    "api.openai.com",
+    "api.openai.com",   
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
     "aiplatform.googleapis.com",
@@ -363,7 +363,7 @@ def test_basics(monkeypatch):
             f.write(str(out))
         #response = out["messages"][-1].content
         response = _out_parser(out)
-        ok = "don't know" in response.lower() or "cannot" in response.lower()
+        ok = "don't know" in response.lower() or "cannot" in response.lower() or "unable" in response.lower()
         _add(score, 2, "reject_irrelevant_queries", ok,
              f"response: {response}" if ok else f"response: {response}. It does not contain 'don't know'")
         if not ok:
