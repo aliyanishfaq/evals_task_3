@@ -1,368 +1,461 @@
-File Name: agent.py
+File Name: database.py
 
 -----------------------------
 
 File Content: 
 
-"""
-LangGraph-based Text-to-SQL Agent for Chinook Database
-"""
 import sqlite3
-import re
-from typing import List, Dict, Any, TypedDict
-from pydantic import BaseModel, Field
 import requests
-
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
-from langchain_anthropic import ChatAnthropic
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import MessagesState
-
-
-class SQLQuery(BaseModel):
-    """Structured output for SQL generation"""
-    sql_query: str = Field(description="The generated SQL query")
-    confidence: str = Field(description="High/Medium/Low confidence in the query")
-    explanation: str = Field(description="Brief explanation of what the query does")
-
-
-class TextToSQLState(TypedDict):
-    """State for the text-to-SQL agent"""
-    messages: List[BaseMessage]
-    user_query: str
-    sql_query: str
-    sql_result: Any
-    final_answer: str
-
+from typing import List, Dict, Any
 
 class ChinookDatabase:
-    """Manages the in-memory Chinook SQLite database"""
-    
     def __init__(self):
-        self.conn = sqlite3.connect(":memory:")
-        self.cursor = self.conn.cursor()
-        self._setup_database()
-    
-    def _setup_database(self):
-        """Download and setup the Chinook database"""
+        self.conn = None
+        self.schema_info = None
+        
+    def initialize_database(self) -> None:
+        """Download Chinook SQL and create in-memory database"""
+        url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
+        
         try:
-            response = requests.get("https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql")
+            response = requests.get(url)
             response.raise_for_status()
-            sql_script = response.text
+            sql_content = response.text
             
-            # Execute the SQL script to create and populate the database
-            self.cursor.executescript(sql_script)
+            self.conn = sqlite3.connect(":memory:")
+            self.conn.executescript(sql_content)
             self.conn.commit()
             
+            self._extract_schema_info()
+            
         except Exception as e:
-            print(f"Error setting up database: {e}")
-            raise
+            raise Exception(f"Failed to initialize database: {str(e)}")
     
-    def execute_query(self, query: str) -> List[Dict]:
-        """Execute a SQL query and return results"""
+    def _extract_schema_info(self) -> None:
+        """Extract detailed schema information for SQL generation"""
+        cursor = self.conn.cursor()
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        schema_info = {}
+        for table in tables:
+            cursor.execute(f"PRAGMA table_info({table})")
+            columns = cursor.fetchall()
+            
+            cursor.execute(f"PRAGMA foreign_key_list({table})")
+            foreign_keys = cursor.fetchall()
+            
+            schema_info[table] = {
+                "columns": [
+                    {
+                        "name": col[1],
+                        "type": col[2],
+                        "not_null": bool(col[3]),
+                        "primary_key": bool(col[5])
+                    }
+                    for col in columns
+                ],
+                "foreign_keys": [
+                    {
+                        "column": fk[3],
+                        "referenced_table": fk[2],
+                        "referenced_column": fk[4]
+                    }
+                    for fk in foreign_keys
+                ]
+            }
+        
+        self.schema_info = schema_info
+    
+    def get_schema_description(self) -> str:
+        """Get detailed schema description for prompt"""
+        if not self.schema_info:
+            return "Database not initialized"
+        
+        description = "Database Schema for Chinook Music Store:\n\n"
+        
+        for table_name, table_info in self.schema_info.items():
+            description += f"Table: {table_name}\n"
+            description += "Columns:\n"
+            
+            for col in table_info["columns"]:
+                pk_indicator = " (PRIMARY KEY)" if col["primary_key"] else ""
+                null_indicator = " NOT NULL" if col["not_null"] else ""
+                description += f"  - {col['name']}: {col['type']}{pk_indicator}{null_indicator}\n"
+            
+            if table_info["foreign_keys"]:
+                description += "Foreign Keys:\n"
+                for fk in table_info["foreign_keys"]:
+                    description += f"  - {fk['column']} -> {fk['referenced_table']}.{fk['referenced_column']}\n"
+            
+            description += "\n"
+        
+        description += """
+Key Relationships:
+- Artists have Albums
+- Albums have Tracks
+- Tracks belong to Genres and MediaTypes
+- Customers place Invoices
+- Invoices contain InvoiceLines for Tracks
+- Employees can be assigned to Customers
+- Playlists contain Tracks via PlaylistTrack junction table
+"""
+        
+        return description
+    
+    def execute_query(self, sql: str) -> List[Dict[str, Any]]:
+        """Execute SQL query and return results as list of dictionaries"""
+        if not self.conn:
+            raise Exception("Database not initialized")
+        
         try:
-            # Security check - only allow SELECT statements
-            if not query.strip().upper().startswith('SELECT'):
-                return {"error": "Only SELECT queries are allowed"}
+            cursor = self.conn.cursor()
+            cursor.execute(sql)
             
-            self.cursor.execute(query)
-            columns = [description[0] for description in self.cursor.description]
-            rows = self.cursor.fetchall()
+            columns = [description[0] for description in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
             
-            # Convert to list of dictionaries
-            result = []
-            for row in rows:
-                result.append(dict(zip(columns, row)))
+            return [dict(zip(columns, row)) for row in rows]
             
-            return result
-            
-        except Exception as e:
-            return {"error": str(e)}
+        except sqlite3.Error as e:
+            raise Exception(f"SQL execution error: {str(e)}")
     
-    def get_schema_info(self) -> str:
-        """Get detailed schema information for the database"""
-        schema_info = []
-        
-        # Get all table names
-        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = self.cursor.fetchall()
-        
-        for (table_name,) in tables:
-            schema_info.append(f"\n--- {table_name.upper()} TABLE ---")
-            
-            # Get column information
-            self.cursor.execute(f"PRAGMA table_info({table_name});")
-            columns = self.cursor.fetchall()
-            
-            for column in columns:
-                col_name, col_type, not_null, default, pk = column[1], column[2], column[3], column[4], column[5]
-                pk_info = " (PRIMARY KEY)" if pk else ""
-                null_info = " NOT NULL" if not_null else ""
-                default_info = f" DEFAULT {default}" if default else ""
-                schema_info.append(f"  {col_name}: {col_type}{pk_info}{null_info}{default_info}")
-            
-            # Get sample data (first 3 rows)
-            self.cursor.execute(f"SELECT * FROM {table_name} LIMIT 3;")
-            sample_rows = self.cursor.fetchall()
-            if sample_rows:
-                schema_info.append("  Sample data:")
-                for row in sample_rows:
-                    schema_info.append(f"    {row}")
-        
-        return "\n".join(schema_info)
-
-
-# Initialize database
-db = ChinookDatabase()
-
-# Initialize the model
-model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
-
-# Get schema information for the prompt
-SCHEMA_INFO = db.get_schema_info()
-
-SYSTEM_PROMPT = f"""You are a text-to-SQL expert for the Chinook music database. Your job is to convert natural language questions into accurate SQL queries.
-
-IMPORTANT CONSTRAINTS:
-- ONLY answer questions that can be answered using the Chinook database
-- If a question cannot be answered with the available data, respond with "I don't know the answer to that question"
-- NEVER discuss topics outside of the database content
-- Only generate SELECT queries (no INSERT, UPDATE, DELETE)
-
-DATABASE SCHEMA:
-{SCHEMA_INFO}
-
-The database contains information about:
-- Artists and their albums
-- Music tracks with genres and media types
-- Customers and their purchases (invoices)
-- Employees and their relationships
-- Playlists and playlist tracks
-
-When generating SQL:
-1. Use proper table joins when needed
-2. Be careful with column names and table relationships
-3. Consider using LIMIT for queries that might return many rows
-4. Use appropriate WHERE clauses to filter results
-"""
-
-
-def sql_generation_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Generate SQL query from user input"""
-    user_query = state["user_query"]
-    
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Convert this question to a SQL query: {user_query}")
-    ]
-    
-    # Use structured output for reliable SQL generation
-    structured_llm = model.with_structured_output(SQLQuery)
-    result = structured_llm.invoke(messages)
-    
-    # Check if the query is relevant
-    if "don't know" in result.explanation.lower() or result.confidence == "Low":
-        return {
-            "sql_query": "",
-            "messages": state["messages"] + [AIMessage(content="I don't know the answer to that question.")]
-        }
-    
-    return {
-        "sql_query": result.sql_query,
-        "messages": state["messages"] + [AIMessage(content=f"Generated SQL: {result.sql_query}")]
-    }
-
-
-def sql_execution_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Execute the generated SQL query"""
-    if not state["sql_query"]:
-        return {"sql_result": None}
-    
-    result = db.execute_query(state["sql_query"])
-    
-    return {
-        "sql_result": result,
-        "messages": state["messages"] + [AIMessage(content=f"Query executed, got {len(result) if isinstance(result, list) else 'error'} results")]
-    }
-
-
-def response_generation_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Generate natural language response based on SQL results"""
-    if not state["sql_result"]:
-        return {"final_answer": "I don't know the answer to that question."}
-    
-    if isinstance(state["sql_result"], dict) and "error" in state["sql_result"]:
-        return {"final_answer": "I encountered an error processing your query."}
-    
-    # Generate natural language response
-    messages = [
-        SystemMessage(content="""You are a helpful assistant that explains database query results in natural language.
-        
-        Rules:
-        - Provide clear, concise answers based on the data
-        - If no results are found, say so politely
-        - Don't hallucinate information not in the results
-        - Keep responses focused and relevant"""),
-        HumanMessage(content=f"""
-        User question: {state['user_query']}
-        SQL query used: {state['sql_query']}
-        Results: {state['sql_result']}
-        
-        Please provide a natural language answer to the user's question based on these results.
-        """)
-    ]
-    
-    response = model.invoke(messages)
-    
-    return {
-        "final_answer": response.content,
-        "messages": state["messages"] + [AIMessage(content=response.content)]
-    }
-
-
-def should_execute_sql(state: TextToSQLState) -> str:
-    """Determine if we should execute the SQL query"""
-    if state["sql_query"]:
-        return "execute_sql"
-    else:
-        return "generate_response"
-
-
-# Build the graph
-graph_builder = StateGraph(TextToSQLState)
-
-# Add nodes
-graph_builder.add_node("generate_sql", sql_generation_node)
-graph_builder.add_node("execute_sql", sql_execution_node)
-graph_builder.add_node("generate_response", response_generation_node)
-
-# Add edges
-graph_builder.add_edge(START, "generate_sql")
-graph_builder.add_conditional_edges(
-    "generate_sql",
-    should_execute_sql,
-    {
-        "execute_sql": "execute_sql",
-        "generate_response": "generate_response"
-    }
-)
-graph_builder.add_edge("execute_sql", "generate_response")
-graph_builder.add_edge("generate_response", END)
-
-# Compile and export
-graph = graph_builder.compile()
-app = graph
-
-
-def run_query(user_question: str) -> str:
-    """Convenience function to run a single query"""
-    initial_state = {
-        "messages": [HumanMessage(content=user_question)],
-        "user_query": user_question,
-        "sql_query": "",
-        "sql_result": None,
-        "final_answer": ""
-    }
-    
-    result = app.invoke(initial_state)
-    return result["final_answer"]
-
-
-if __name__ == "__main__":
-    # Test queries
-    test_queries = [
-        "How many artists are in the database?",
-        "What are the top 5 genres by number of tracks?",
-        "Who are the customers from Brazil?",
-        "What is the weather like today?"  # Should return "I don't know"
-    ]
-    
-    print("Testing Text-to-SQL Agent:")
-    print("=" * 50)
-    
-    for query in test_queries:
-        print(f"\nQ: {query}")
-        answer = run_query(query)
-        print(f"A: {answer}")
-        print("-" * 30)
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
 
 
 
-File Name: langgraph.json
+File Name: main.py
 
 -----------------------------
 
 File Content: 
 
-{
-  "dependencies": ["."],
-  "graphs": {
-    "agent": "./agent.py:app"
-  },
-  "env": ".env"
-}
+#!/usr/bin/env python3
 
+import sys
+from pathlib import Path
 
+current_dir = Path(__file__).parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
 
-File Name: test_demo.py
+from text_to_sql_agent import TextToSQLAgent
 
------------------------------
-
-File Content: 
-
-"""
-Demo script to test the Chinook database setup and SQL generation structure
-"""
-from agent import ChinookDatabase
+agent = TextToSQLAgent()
+app = agent.graph
 
 def main():
-    print("Testing Chinook Database Setup")
-    print("=" * 50)
+    """Main application entry point"""
+    print("🎵 Chinook Music Store SQL Agent")
+    print("Ask questions about artists, albums, tracks, customers, and sales!")
+    print("Type 'exit' or 'quit' to exit.\n")
     
-    # Test database setup
+    agent = TextToSQLAgent()
+    
     try:
-        db = ChinookDatabase()
-        print("✓ Database initialized successfully")
-        
-        # Test schema info
-        print("\n✓ Database schema loaded")
-        print(f"Schema info length: {len(db.get_schema_info())} characters")
-        
-        # Test basic queries
-        test_queries = [
-            "SELECT COUNT(*) as artist_count FROM Artist",
-            "SELECT Name FROM Genre LIMIT 5",
-            "SELECT FirstName, LastName, Country FROM Customer WHERE Country = 'Brazil' LIMIT 3",
-            "SELECT COUNT(*) as track_count FROM Track"
-        ]
-        
-        print("\nTesting SQL execution:")
-        for query in test_queries:
-            result = db.execute_query(query)
-            if isinstance(result, dict) and "error" in result:
-                print(f"❌ Query failed: {query}")
-                print(f"   Error: {result['error']}")
-            else:
-                print(f"✓ Query successful: {query}")
-                print(f"   Results: {len(result)} rows")
-                if result:
-                    print(f"   Sample: {result[0] if len(result) > 0 else 'No data'}")
-            print()
-            
-        # Test invalid query
-        print("Testing security (non-SELECT query):")
-        result = db.execute_query("INSERT INTO Artist (Name) VALUES ('Test')")
-        if isinstance(result, dict) and "error" in result:
-            print("✓ Security check working - non-SELECT queries blocked")
-        else:
-            print("❌ Security issue - non-SELECT query executed")
-            
-    except Exception as e:
-        print(f"❌ Database setup failed: {e}")
+        while True:
+            try:
+                user_input = input("❓ Your question: ").strip()
+                
+                if user_input.lower() in ['exit', 'quit', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                
+                if not user_input:
+                    continue
+                
+                print("🤔 Thinking...")
+                response = agent.query(user_input)
+                print(f"💬 {response}\n")
+                
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                break
+            except EOFError:
+                print("\n👋 Goodbye!")
+                break
     
-    print("\n" + "=" * 50)
-    print("Demo completed. To use the full agent, set ANTHROPIC_API_KEY in .env file")
+    finally:
+        agent.close()
 
 if __name__ == "__main__":
     main()
+
+
+
+File Name: test_agent.py
+
+-----------------------------
+
+File Content: 
+
+#!/usr/bin/env python3
+
+"""
+Simple test script to verify the text-to-SQL agent functionality
+"""
+
+from text_to_sql_agent import TextToSQLAgent
+import os
+
+def test_database_initialization():
+    """Test that database initializes correctly"""
+    print("Testing database initialization...")
+    agent = TextToSQLAgent()
+    
+    if agent.db.conn is None:
+        agent.db.initialize_database()
+    
+    schema = agent.db.get_schema_description()
+    print("✅ Database initialized successfully")
+    print(f"Schema contains {len(agent.db.schema_info)} tables")
+    agent.close()
+
+def test_sample_queries():
+    """Test sample queries"""
+    if not os.getenv("OPENAI_API_KEY"):
+        print("⚠️  OPENAI_API_KEY not set. Skipping LLM tests.")
+        print("Set your API key in .env file to test the full workflow.")
+        return
+    
+    print("\nTesting sample queries...")
+    agent = TextToSQLAgent()
+    
+    test_queries = [
+        "How many artists are in the database?",
+        "Show me all albums by AC/DC",
+        "What is the weather today?",  # Should be irrelevant
+        "List the top 5 most expensive tracks"
+    ]
+    
+    for query in test_queries:
+        print(f"\n🔍 Query: {query}")
+        try:
+            response = agent.query(query)
+            print(f"💬 Response: {response}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+    
+    agent.close()
+
+def main():
+    print("🧪 Testing Text-to-SQL Agent")
+    print("=" * 40)
+    
+    try:
+        test_database_initialization()
+        test_sample_queries()
+        print("\n✅ All tests completed!")
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+File Name: text_to_sql_agent.py
+
+-----------------------------
+
+File Content: 
+
+import os
+from typing import Dict, Any, List
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+from langgraph.graph import StateGraph, END
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage, SystemMessage
+
+from database import ChinookDatabase
+
+load_dotenv()
+
+@dataclass
+class AgentState:
+    user_query: str
+    sql_query: str = ""
+    sql_results: List[Dict[str, Any]] = None
+    final_response: str = ""
+    error: str = ""
+    schema_info: str = ""
+
+class TextToSQLAgent:
+    def __init__(self):
+        self.db = ChinookDatabase()
+        self.llm = ChatOpenAI(
+            model="gpt-4-turbo-preview",
+            temperature=0,
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
+        self.graph = self._build_graph()
+    
+    def _build_graph(self) -> StateGraph:
+        """Build the LangGraph workflow"""
+        workflow = StateGraph(AgentState)
+        
+        workflow.add_node("generate_sql", self.generate_sql_node)
+        workflow.add_node("execute_sql", self.execute_sql_node)
+        workflow.add_node("generate_response", self.generate_response_node)
+        workflow.add_node("handle_error", self.handle_error_node)
+        
+        workflow.set_entry_point("generate_sql")
+        
+        workflow.add_edge("generate_sql", "execute_sql")
+        workflow.add_conditional_edges(
+            "execute_sql",
+            self._should_continue_after_sql,
+            {
+                "generate_response": "generate_response",
+                "handle_error": "handle_error"
+            }
+        )
+        workflow.add_edge("generate_response", END)
+        workflow.add_edge("handle_error", END)
+        
+        return workflow.compile()
+    
+    def _should_continue_after_sql(self, state: AgentState) -> str:
+        """Decide whether to continue to response generation or handle error"""
+        return "handle_error" if state.error else "generate_response"
+    
+    def generate_sql_node(self, state: AgentState) -> AgentState:
+        """Generate SQL query from natural language"""
+        if not self.db.conn:
+            self.db.initialize_database()
+        
+        schema_info = self.db.get_schema_description()
+        state.schema_info = schema_info
+        
+        system_prompt = f"""You are a SQL expert specializing in the Chinook music store database.
+
+{schema_info}
+
+Your task is to convert natural language queries into valid SQLite queries for this database.
+
+IMPORTANT RULES:
+1. Only generate queries that can be answered using this database schema
+2. If the query is unrelated to music, artists, albums, tracks, customers, invoices, or employees, respond with: "IRRELEVANT_QUERY"
+3. Return only the SQL query, no explanation
+4. Use proper SQLite syntax
+5. Use JOINs when accessing related data across tables
+6. Be precise with column names and table relationships
+
+Examples:
+- "Show me all albums by AC/DC" -> SELECT Album.Title FROM Album JOIN Artist ON Album.ArtistId = Artist.ArtistId WHERE Artist.Name = 'AC/DC'
+- "What are the most expensive tracks?" -> SELECT Name, UnitPrice FROM Track ORDER BY UnitPrice DESC LIMIT 10
+"""
+        
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"Convert this to SQL: {state.user_query}")
+        ]
+        
+        try:
+            response = self.llm.invoke(messages)
+            sql_query = response.content.strip()
+            
+            if sql_query == "IRRELEVANT_QUERY":
+                state.error = "irrelevant"
+            else:
+                state.sql_query = sql_query
+                
+        except Exception as e:
+            state.error = f"SQL generation failed: {str(e)}"
+        
+        return state
+    
+    def execute_sql_node(self, state: AgentState) -> AgentState:
+        """Execute the generated SQL query"""
+        if state.error:
+            return state
+            
+        try:
+            results = self.db.execute_query(state.sql_query)
+            state.sql_results = results
+            
+        except Exception as e:
+            state.error = f"SQL execution failed: {str(e)}"
+        
+        return state
+    
+    def generate_response_node(self, state: AgentState) -> AgentState:
+        """Generate natural language response from SQL results"""
+        if state.error:
+            return state
+        
+        system_prompt = """You are a helpful assistant that explains database query results in natural language.
+
+Given a user's original question and the SQL query results, provide a clear, concise response in natural language.
+
+Rules:
+1. Be conversational and friendly
+2. Present the data in an organized way
+3. If no results, say "No results found for your query"
+4. Don't mention the SQL query or technical details
+5. Focus on answering the user's original question
+"""
+        
+        results_text = ""
+        if not state.sql_results:
+            results_text = "No results found."
+        elif len(state.sql_results) == 0:
+            results_text = "No results found."
+        else:
+            results_text = f"Found {len(state.sql_results)} results:\n"
+            for i, row in enumerate(state.sql_results[:10], 1):
+                row_text = ", ".join([f"{k}: {v}" for k, v in row.items()])
+                results_text += f"{i}. {row_text}\n"
+            
+            if len(state.sql_results) > 10:
+                results_text += f"... and {len(state.sql_results) - 10} more results"
+        
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"""
+Original question: {state.user_query}
+Query results: {results_text}
+
+Provide a natural language response to the user's question based on these results.
+""")
+        ]
+        
+        try:
+            response = self.llm.invoke(messages)
+            state.final_response = response.content.strip()
+            
+        except Exception as e:
+            state.error = f"Response generation failed: {str(e)}"
+        
+        return state
+    
+    def handle_error_node(self, state: AgentState) -> AgentState:
+        """Handle errors and provide appropriate responses"""
+        if state.error == "irrelevant":
+            state.final_response = "I don't know the answer to that question. I can only help with queries related to the Chinook music store database, including information about artists, albums, tracks, customers, and sales."
+        else:
+            state.final_response = "I don't know the answer to that question."
+        
+        return state
+    
+    def query(self, user_input: str) -> str:
+        """Main interface to query the agent"""
+        initial_state = AgentState(user_query=user_input)
+        
+        try:
+            final_state = self.graph.invoke(initial_state)
+            return final_state.final_response
+        except Exception as e:
+            return "I don't know the answer to that question."
+    
+    def close(self):
+        """Clean up resources"""
+        self.db.close()
 

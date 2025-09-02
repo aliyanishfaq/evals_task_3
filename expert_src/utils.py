@@ -1,159 +1,90 @@
-import sqlite3
+def deduplicate_sources(search_response: dict | list[dict]) -> list[dict]:
+    """
+    Takes either a single search response or list of responses from Tavily API and de-duplicates them based on the URL.
 
-import requests
-from langchain_community.utilities.sql_database import SQLDatabase
-from sqlalchemy import create_engine, inspect
-from sqlalchemy.pool import StaticPool
+    Args:
+        search_response: Either:
+            - A dict with a 'results' key containing a list of search results
+            - A list of dicts, each containing search results
 
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Convert input to list of results
+    if isinstance(search_response, dict):
+        sources_list = search_response["results"]
+    elif isinstance(search_response, list):
+        sources_list = []
+        for response in search_response:
+            if isinstance(response, dict) and "results" in response:
+                sources_list.extend(response["results"])
+            else:
+                sources_list.extend(response)
+    else:
+        raise ValueError(
+            "Input must be either a dict with 'results' or a list of search results"
+        )
 
-# fetch the chinook database from github and create an in-memory database
-def get_engine_for_chinook_db():
-    """Pull sql file, populate in-memory database, and create engine."""
-    url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
-    response = requests.get(url, timeout=10)
-    sql_script = response.text
+    # Deduplicate by URL
+    unique_urls = set()
+    unique_sources_list = []
+    for source in sources_list:
+        if source["url"] not in unique_urls:
+            unique_urls.add(source["url"])
+            unique_sources_list.append(source)
 
-    connection = sqlite3.connect(":memory:", check_same_thread=False)
-    connection.executescript(sql_script)
-    return create_engine(
-        "sqlite://",
-        creator=lambda: connection,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-
-
-def get_db_table_names():
-    """Get list of all table names in the database."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    return db.get_usable_table_names()
-
-
-def get_detailed_table_info():
-    """Get detailed information for each table including schema, keys, and sample data."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    inspector = inspect(engine)
-    table_names = db.get_usable_table_names()
-
-    detailed_info = {}
-
-    for table_name in table_names:
-        table_info = {
-            "columns": [],
-            "primary_key": None,
-            "foreign_keys": [],
-            "sample_data": [],
-        }
-
-        # Get table schema using SQLAlchemy inspector
-        try:
-            columns = inspector.get_columns(table_name)
-            for column in columns:
-                table_info["columns"].append(
-                    {
-                        "name": column["name"],
-                        "type": str(column["type"]),
-                        "nullable": column.get("nullable", "unknown"),
-                    }
-                )
-
-            # Get primary key
-            pk = inspector.get_pk_constraint(table_name)
-            if pk["constrained_columns"]:
-                table_info["primary_key"] = pk["constrained_columns"]
-
-            # Get foreign keys
-            fks = inspector.get_foreign_keys(table_name)
-            for fk in fks:
-                table_info["foreign_keys"].append(
-                    {
-                        "columns": fk["constrained_columns"],
-                        "referred_table": fk["referred_table"],
-                        "referred_columns": fk["referred_columns"],
-                    }
-                )
-
-        except Exception as e:
-            table_info["error"] = str(e)
-
-        # Get sample data (first 3 rows)
-        try:
-            sample_query = f"SELECT * FROM {table_name} LIMIT 3"  # nosec B608
-            sample_result = db.run(sample_query)
-            table_info["sample_data"] = sample_result
-        except Exception as e:
-            table_info["sample_data_error"] = str(e)
-
-        detailed_info[table_name] = table_info
-
-    return detailed_info
+    return unique_sources_list
 
 
-def get_schema_overview():
-    """Get a concise overview of all table schemas."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    inspector = inspect(engine)
-    table_names = db.get_usable_table_names()
+def format_sources(
+    sources_list: list[dict],
+    include_raw_content: bool = True,
+    max_tokens_per_source: int = 1000,
+) -> str:
+    """
+    Takes a list of unique results from Tavily API and formats them.
+    Limits the raw_content to approximately max_tokens_per_source.
+    include_raw_content specifies whether to include the raw_content from Tavily in the formatted string.
 
-    schema_overview = {}
+    Args:
+        sources_list: list of unique results from Tavily API
+        max_tokens_per_source: int, maximum number of tokens per each search result to include in the formatted string
+        include_raw_content: bool, whether to include the raw_content from Tavily in the formatted string
 
-    for table_name in table_names:
-        try:
-            columns = inspector.get_columns(table_name)
-            schema_overview[table_name] = [
-                {"name": col["name"], "type": str(col["type"])} for col in columns
-            ]
-        except Exception as e:
-            schema_overview[table_name] = {"error": str(e)}
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Format output
+    formatted_text = "Sources:\n\n"
+    for source in sources_list:
+        formatted_text += f"Source {source['title']}:\n===\n"
+        formatted_text += f"URL: {source['url']}\n===\n"
+        formatted_text += (
+            f"Most relevant content from source: {source['content']}\n===\n"
+        )
+        if include_raw_content:
+            # Using rough estimate of 4 characters per token
+            char_limit = max_tokens_per_source * 4
+            # Handle None raw_content
+            raw_content = source.get("raw_content", "")
+            if raw_content is None:
+                raw_content = ""
+                print(f"Warning: No raw_content found for source {source['url']}")
+            if len(raw_content) > char_limit:
+                raw_content = raw_content[:char_limit] + "... [truncated]"
+            formatted_text += f"Full source content limited to {max_tokens_per_source} tokens: {raw_content}\n\n"
 
-    return schema_overview
+    return formatted_text.strip()
 
 
-# Example usage
-if __name__ == "__main__":
-    print("=== Basic Table Names ===")
-    table_names = get_db_table_names()
-    print(table_names)
-    print()
-
-    print("=== Detailed Table Information ===")
-    detailed_info = get_detailed_table_info()
-    for table_name, info in detailed_info.items():
-        print(f"\n--- Table: {table_name} ---")
-
-        if "error" in info:
-            print(f"Error: {info['error']}")
-        else:
-            print("Columns:")
-            for col in info["columns"]:
-                print(f"  - {col['name']}: {col['type']} (nullable: {col['nullable']})")
-
-            if info["primary_key"]:
-                print(f"  Primary Key: {info['primary_key']}")
-
-            if info["foreign_keys"]:
-                print("  Foreign Keys:")
-                for fk in info["foreign_keys"]:
-                    print(
-                        f"    {fk['columns']} -> {fk['referred_table']}.{fk['referred_columns']}"
-                    )
-
-        if "sample_data_error" in info:
-            print(f"Sample data error: {info['sample_data_error']}")
-        else:
-            print(f"Sample data: {info['sample_data']}")
-
-        print("-" * 50)
-
-    print("\n=== Database Schema Overview ===")
-    schema_overview = get_schema_overview()
-    for table_name, columns in schema_overview.items():
-        print(f"\n{table_name}:")
-        if isinstance(columns, list):
-            for column in columns:
-                print(f"  {column['name']}: {column['type']}")
-        else:
-            print(f"  Error: {columns['error']}")
+def format_all_notes(completed_notes: list[str]) -> str:
+    """Format a list of notes into a string"""
+    formatted_str = ""
+    for idx, company_notes in enumerate(completed_notes, 1):
+        formatted_str += f"""
+{'='*60}
+Note: {idx}:
+{'='*60}
+Notes from research:
+{company_notes}"""
+    return formatted_str

@@ -1,48 +1,61 @@
 LLM_AS_A_JUDGE_PROMPT = '''
-You are an expert coding evaluator for text-to-SQL agent implementations. You will be provided with a coding agent's implementation and an expert-written implementation that represents the gold standard.
+You are an expert coding evaluator for coding agent that researches company information. You will be provided with a coding agent's implementation and an expert-written implementation that represents the gold standard.
 
-Your job is to evaluate the coding agent's implementation for correctness, code quality, and adherence to the expert's architectural philosophy. 
+Your job is to evaluate the coding agent's implementation for correctness, code quality, and adherence to the expert's architectural and code cleanliness philosophy. 
 You will be provided with basic requirements and good practices. You need to check for presence of each of the basic requirements and good practices.
 Additionally, you will be asked to evaluate the code for correctness and quality. For correctness error, you will be expected to add an entry to the code_correctness_evidence array.
 
-Never duplicate the same issue across multiple evidence arrays. Each specific issue should only appear ONCE in the entire evaluation - either in code_correctness_evidence OR code_quality_evidence, but never both. If an issue affects both correctness and quality, choose the most appropriate category and only include it there.
+**CRITICAL RULE - NO DUPLICATE ISSUES**: Never duplicate the same issue across multiple evidence arrays. Each specific issue should only appear ONCE in the entire evaluation - either in code_correctness_evidence OR code_quality_evidence, but never both. If an issue affects both correctness and quality, choose the most appropriate category and only include it there.
+
+**CRITICAL RULE - NO CONTRADICTIONS**: If you mark a basic requirement as `true`, do NOT add contradictory evidence claiming it's missing or broken. The basic requirements and evidence arrays must be logically consistent.
 
 Return your evaluation as a single JSON object.
 
 ## Evaluation Criteria
 
-Basic Requirements: The code must meet these core specifications for a functional SQL agent. Mark `true` if present and working correctly, `false` if absent or broken.
+Basic Requirements: The code must meet these core specifications for a functional Company Researcher agent. Mark `true` if present and working correctly, `false` if absent or broken.
 
-- database_initialization: Correctly initializes and connects to the Chinook database (either by fetching from GitHub, using a local database file, or other valid setup method). Award true for any working database connection setup. However, if it uses a local database file instead of fetching from a remote source, flag this in the code quality evaluation as critical severity.
-- schema_extraction: Correctly extracts database schema information for SQL generation context  
-- sql_generation: Correctly converts natural language queries to valid SQL using LLM
-- query_execution: Correctly executes SQL against database and captures results
-- natural_language_response: Correctly returns human-readable answers based on query results as AIMessage
-- irrelevant_query_handling: Correctly responds "I don't know" or similar for non-database questions
+-  max_search_queries: The code should have a way to set the maximum number of search queries to be generated per requested.
+-  max_search_results: The code should have a way to set the maximum number of search results to be generated per requested.
+-  max_reflection_steps: The code should have a way to set the maximum number of reflection steps allowed to avoid infinite cycles.
+-  reflection_step: The code should have a way to reflect on the completeness of the research and determine if additional searches are needed.
 
-Good Practices: Additional qualities of a well-designed SQL agent. Mark `true` if implemented correctly, `false` if absent.
 
-- **separation_of_concerns**: Distinct nodes/functions for SQL generation, execution, and response formatting
-- **error_handling**: Gracefully handles SQL errors, connection issues, and malformed queries
 
-Expert code uses a clean linear pipeline: generate_sql → execute_sql → generate_answer. Each node has a single responsibility with direct database integration (no tools). Evaluate alignment with this philosophy.
-When evaluating code quality, you should check for the patterns used in the expert code. If there is any unecessary complexity or if there is a significant difference from the expert's code architecture, you should
-flag that.
+Good Practices: Additional qualities of a well-designed Company Researcher agent. Mark `true` if implemented correctly, `false` if absent.
+
+- functional_reflection: The reflection node is connected to the web search node so that if the research is not complete, the agent can execute web searches again. The implementation should also be correct in terms of logic and the paths it takes.
+- no_redundant_files: There should be no redundant files in the code. The code should be as clean and concise as possible. Return false if there are files like `test_agent.py`, `demo.py`
+- preferred_state_type: The code should use TypedDict for the state. Return True if the code uses TypedDict for the state. If it uses something else, return false.
+- separate_prompts: Expert code has separate prompts for query writing, reflection, and extraction. The code should have separate prompts for each of these. Return true if the code has separate prompts for each of these. Otherwise, return false.
+
+
+## Evidence Categorization Guidelines
+
+**Code Quality Evidence** (architectural/design issues):
+- No separation of features. Each feature should be in a separate node.
+- Unnecessary complexity
+
+**Code Correctness Evidence** (functional/runtime bugs):
+- Runtime exceptions
+- Type errors, import failures
+
+**Remember**: NEVER put the same issue in both categories. Choose the most appropriate one.
 
 ## JSON Response Structure
 
 {{
   "basic_requirements": {{
-    "database_initialization": boolean,
-    "schema_extraction": boolean, 
-    "sql_generation": boolean,
-    "query_execution": boolean,
-    "natural_language_response": boolean,
-    "irrelevant_query_handling": boolean
+    "max_search_queries": boolean,
+    "max_search_results": boolean,
+    "max_reflection_steps": boolean,
+    "reflection_step": boolean,
   }},
   "good_practices": {{
-    "separation_of_concerns": boolean,
-    "error_handling": boolean,
+    "functional_reflection": boolean,
+    "no_redundant_files": boolean,
+    "preferred_state_type": boolean,
+    "separate_prompts": boolean,
   }},
   "code_quality_check": boolean,
   "code_quality_evidence": [
@@ -68,305 +81,611 @@ The human annotator added the following notes when running the code:
 '''
 
 USER_TASK = '''
-Create a LangGraph-based text-to-SQL agent. It should generate sql, execute that sql against the chinook sqlite database, and then generate a response answer in natural language based on the result.
-To use chinook db, fetch it from `https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql` and create  in-memory SQLite database using langgraph
-It might be useful to pass in the detailed info of the table schema to the prompt so the agent can convert user's natural request to correct sql. Whenever, the query is irrelevant, or cannot be answered using
-the sql db search, just say you don't know the answer and don't talk about anything. Your purpose is to only convert text request to sql and generate response in natural language.
+Create me a company researcher built using langgraph. It should be a multi-node graph. The user should be expected to provide the name of the company and the optional notes if they want. There should be a set maximum search queries that we should do per company and max search results. The LLM should generate the queries that should be searched using the Tavily API to fill the following structured object
+
+"title": "CompanyInfo", "description": "Basic information about a company", "type": "object", "properties": { "company_name": {"type": "string", "description": "Official name of the company"}, "founding_year": {"type": "integer", "description": "Year the company was founded"}, "founder_names": {"type": "array", "items": {"type": "string"}, "description": "Names of the founding team members"}, "product_description": {"type": "string", "description": "Brief description of the company's main product or service"}, "funding_summary": {"type": "string", "description": "Summary of the company's funding history”} "notable_customers": {"type": "string", "description": "Known customers that use company's product/service"}
+
+}, "required": ["company_name"] }
+
+There should be a reflection step at the end. This step should determine if we have good and sufficient information for the the company. If we don’t have sufficient information we should execute web searches again to get information on the company. There should also be a cap on the number of allowed reflection steps. Keep track of the conversation in messages array and try to do web searchers in parallel to improve speed.
 '''
 
 EXPERT_CODE = '''
-prompts.py
+File Name: configuration.py
 
-QA_SYSTEM_PROMPT = """
-You are an assistant that helps to form nice and human understandable answers.
-The information part contains the provided information that you must use to construct an answer.
-The provided information is authoritative, you must never doubt it or try to use your internal knowledge to correct it.
-Make the answer sound as a response to the question. Do not mention that you based the result on the given information.
-Here is an example:
+-----------------------------
 
-Question: How many songs do you have by James Brown?
-Context:[20]
-Helpful Answer: We have 20 songs by James Brown.
+File Content: 
 
-Follow this example when generating answers.
-If the provided information is empty, say that you don't know the answer.
-You will have the full message history to help you answer the question, if you need more information, ask the user for it.
-"""
+import os
+from dataclasses import dataclass, fields
+from typing import Any, Optional
 
-SQL_SYSTEM_PROMPT = """
-Task: Generate SQL statement to query a database.
-Instructions:
-Use only the provided relationship types and properties in the schema.
-Do not use any other relationship types or properties that are not provided.
-Note: Do not include any explanations or apologies in your responses.
-Do not respond to any questions that might ask anything else than for you to construct a SQL statement.
-Do not include any text except the generated SQL statement.
-You will have the full message history to help you answer the question, if you dont need to generate a sql query, just generate a sql query that will return an empty result.
-"""
-
-utils.py
-
-import sqlite3
-
-import requests
-from langchain_community.utilities.sql_database import SQLDatabase
-from sqlalchemy import create_engine, inspect
-from sqlalchemy.pool import StaticPool
+from langchain_core.runnables import RunnableConfig
 
 
-# fetch the chinook database from github and create an in-memory database
-def get_engine_for_chinook_db():
-    """Pull sql file, populate in-memory database, and create engine."""
-    url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
-    response = requests.get(url, timeout=10)
-    sql_script = response.text
+@dataclass(kw_only=True)
+class Configuration:
+    """The configurable fields for the chatbot."""
 
-    connection = sqlite3.connect(":memory:", check_same_thread=False)
-    connection.executescript(sql_script)
-    return create_engine(
-        "sqlite://",
-        creator=lambda: connection,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
+    max_search_queries: int = 3  # Max search queries per company
+    max_search_results: int = 3  # Max search results per query
+    max_reflection_steps: int = 0  # Max reflection steps
+    include_search_results: bool = (
+        False  # Whether to include search results in the output
+    )
+
+    @classmethod
+    def from_runnable_config(
+        cls, config: Optional[RunnableConfig] = None
+    ) -> "Configuration":
+        """Create a Configuration instance from a RunnableConfig."""
+        configurable = (
+            config["configurable"] if config and "configurable" in config else {{}}
+        )
+        values: dict[str, Any] = {
+            f.name: os.environ.get(f.name.upper(), configurable.get(f.name))
+            for f in fields(cls)
+            if f.init
+        }
+        return cls(**{{k: v for k, v in values.items() if v}})
+
+
+
+
+File Name: graph.py
+
+-----------------------------
+
+File Content: 
+
+import asyncio
+from typing import cast, Any, Literal
+import json
+
+from tavily import AsyncTavilyClient
+from langchain_anthropic import ChatAnthropic
+from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import START, END, StateGraph
+from pydantic import BaseModel, Field
+
+from agent.configuration import Configuration
+from agent.state import InputState, OutputState, OverallState
+from agent.utils import deduplicate_sources, format_sources, format_all_notes
+from agent.prompts import (
+    EXTRACTION_PROMPT,
+    REFLECTION_PROMPT,
+    INFO_PROMPT,
+    QUERY_WRITER_PROMPT,
+)
+
+# LLMs
+
+rate_limiter = InMemoryRateLimiter(
+    requests_per_second=4,
+    check_every_n_seconds=0.1,
+    max_bucket_size=10,  # Controls the maximum burst size.
+)
+claude_3_5_sonnet = ChatAnthropic(
+    model="claude-3-5-sonnet-latest", temperature=0, rate_limiter=rate_limiter
+)
+
+# Search
+
+tavily_async_client = AsyncTavilyClient()
+
+
+class Queries(BaseModel):
+    queries: list[str] = Field(
+        description="List of search queries.",
     )
 
 
-def get_db_table_names():
-    """Get list of all table names in the database."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    return db.get_usable_table_names()
+class ReflectionOutput(BaseModel):
+    is_satisfactory: bool = Field(
+        description="True if all required fields are well populated, False otherwise"
+    )
+    missing_fields: list[str] = Field(
+        description="List of field names that are missing or incomplete"
+    )
+    search_queries: list[str] = Field(
+        description="If is_satisfactory is False, provide 1-3 targeted search queries to find the missing information"
+    )
+    reasoning: str = Field(description="Brief explanation of the assessment")
 
 
-def get_detailed_table_info():
-    """Get detailed information for each table including schema, keys, and sample data."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    inspector = inspect(engine)
-    table_names = db.get_usable_table_names()
+def generate_queries(state: OverallState, config: RunnableConfig) -> dict[str, Any]:
+    """Generate search queries based on the user input and extraction schema."""
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
+    max_search_queries = configurable.max_search_queries
 
-    detailed_info = {{}}
+    # Generate search queries
+    structured_llm = claude_3_5_sonnet.with_structured_output(Queries)
 
-    for table_name in table_names:
-        table_info = {
-            "columns": [],
-            "primary_key": None,
-            "foreign_keys": [],
-            "sample_data": [],
+    # Format system instructions
+    query_instructions = QUERY_WRITER_PROMPT.format(
+        company=state.company,
+        info=json.dumps(state.extraction_schema, indent=2),
+        user_notes=state.user_notes,
+        max_search_queries=max_search_queries,
+    )
+
+    # Generate queries
+    results = cast(
+        Queries,
+        structured_llm.invoke(
+            [
+                {"role": "system", "content": query_instructions},
+                {
+                    "role": "user",
+                    "content": "Please generate a list of search queries related to the schema that you want to populate.",
+                },
+            ]
+        ),
+    )
+
+    # Queries
+    query_list = [query for query in results.queries]
+    return {"search_queries": query_list}
+
+
+async def research_company(
+    state: OverallState, config: RunnableConfig
+) -> dict[str, Any]:
+    """Execute a multi-step web search and information extraction process.
+
+    This function performs the following steps:
+    1. Executes concurrent web searches using the Tavily API
+    2. Deduplicates and formats the search results
+    """
+
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
+    max_search_results = configurable.max_search_results
+
+    # Search tasks
+    search_tasks = []
+    for query in state.search_queries:
+        search_tasks.append(
+            tavily_async_client.search(
+                query,
+                max_results=max_search_results,
+                include_raw_content=True,
+                topic="general",
+            )
+        )
+
+    # Execute all searches concurrently
+    search_docs = await asyncio.gather(*search_tasks)
+
+    # Deduplicate and format sources
+    deduplicated_search_docs = deduplicate_sources(search_docs)
+    source_str = format_sources(
+        deduplicated_search_docs, max_tokens_per_source=1000, include_raw_content=True
+    )
+
+    # Generate structured notes relevant to the extraction schema
+    p = INFO_PROMPT.format(
+        info=json.dumps(state.extraction_schema, indent=2),
+        content=source_str,
+        company=state.company,
+        user_notes=state.user_notes,
+    )
+    result = await claude_3_5_sonnet.ainvoke(p)
+    state_update = {
+        "completed_notes": [str(result.content)],
+    }
+    if configurable.include_search_results:
+        state_update["search_results"] = deduplicated_search_docs
+
+    return state_update
+
+
+def gather_notes_extract_schema(state: OverallState) -> dict[str, Any]:
+    """Gather notes from the web search and extract the schema fields."""
+
+    # Format all notes
+    notes = format_all_notes(state.completed_notes)
+
+    # Extract schema fields
+    system_prompt = EXTRACTION_PROMPT.format(
+        info=json.dumps(state.extraction_schema, indent=2), notes=notes
+    )
+    structured_llm = claude_3_5_sonnet.with_structured_output(state.extraction_schema)
+    result = structured_llm.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": "Produce a structured output from these notes.",
+            },
+        ]
+    )
+    return {"info": result}
+
+
+def reflection(state: OverallState) -> dict[str, Any]:
+    """Reflect on the extracted information and generate search queries to find missing information."""
+    structured_llm = claude_3_5_sonnet.with_structured_output(ReflectionOutput)
+
+    # Format reflection prompt
+    system_prompt = REFLECTION_PROMPT.format(
+        schema=json.dumps(state.extraction_schema, indent=2),
+        info=state.info,
+    )
+
+    # Invoke
+    result = cast(
+        ReflectionOutput,
+        structured_llm.invoke(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Produce a structured reflection output."},
+            ]
+        ),
+    )
+
+    if result.is_satisfactory:
+        return {"is_satisfactory": result.is_satisfactory}
+    else:
+        return {
+            "is_satisfactory": result.is_satisfactory,
+            "search_queries": result.search_queries,
+            "reflection_steps_taken": state.reflection_steps_taken + 1,
         }
 
-        # Get table schema using SQLAlchemy inspector
-        try:
-            columns = inspector.get_columns(table_name)
-            for column in columns:
-                table_info["columns"].append(
-                    {
-                        "name": column["name"],
-                        "type": str(column["type"]),
-                        "nullable": column.get("nullable", "unknown"),
-                    }
-                )
 
-            # Get primary key
-            pk = inspector.get_pk_constraint(table_name)
-            if pk["constrained_columns"]:
-                table_info["primary_key"] = pk["constrained_columns"]
+def route_from_reflection(
+    state: OverallState, config: RunnableConfig
+) -> Literal[END, "research_company"]:  # type: ignore
+    """Route the graph based on the reflection output."""
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
 
-            # Get foreign keys
-            fks = inspector.get_foreign_keys(table_name)
-            for fk in fks:
-                table_info["foreign_keys"].append(
-                    {
-                        "columns": fk["constrained_columns"],
-                        "referred_table": fk["referred_table"],
-                        "referred_columns": fk["referred_columns"],
-                    }
-                )
+    # If we have satisfactory results, end the process
+    if state.is_satisfactory:
+        return END
 
-        except Exception as e:
-            table_info["error"] = str(e)
+    # If results aren't satisfactory but we haven't hit max steps, continue research
+    if state.reflection_steps_taken <= configurable.max_reflection_steps:
+        return "research_company"
 
-        # Get sample data (first 3 rows)
-        try:
-            sample_query = f"SELECT * FROM {{table_name}} LIMIT 3"  # nosec B608
-            sample_result = db.run(sample_query)
-            table_info["sample_data"] = sample_result
-        except Exception as e:
-            table_info["sample_data_error"] = str(e)
-
-        detailed_info[table_name] = table_info
-
-    return detailed_info
+    # If we've exceeded max steps, end even if not satisfactory
+    return END
 
 
-def get_schema_overview():
-    """Get a concise overview of all table schemas."""
-    engine = get_engine_for_chinook_db()
-    db = SQLDatabase(engine)
-    inspector = inspect(engine)
-    table_names = db.get_usable_table_names()
+# Add nodes and edges
+builder = StateGraph(
+    OverallState,
+    input=InputState,
+    output=OutputState,
+    config_schema=Configuration,
+)
+builder.add_node("gather_notes_extract_schema", gather_notes_extract_schema)
+builder.add_node("generate_queries", generate_queries)
+builder.add_node("research_company", research_company)
+builder.add_node("reflection", reflection)
 
-    schema_overview = {{}}
+builder.add_edge(START, "generate_queries")
+builder.add_edge("generate_queries", "research_company")
+builder.add_edge("research_company", "gather_notes_extract_schema")
+builder.add_edge("gather_notes_extract_schema", "reflection")
+builder.add_conditional_edges("reflection", route_from_reflection)
 
-    for table_name in table_names:
-        try:
-            columns = inspector.get_columns(table_name)
-            schema_overview[table_name] = [
-                {"name": col["name"], "type": str(col["type"])} for col in columns
-            ]
-        except Exception as e:
-            schema_overview[table_name] = {"error": str(e)}
-
-    return schema_overview
-
-
-# Example usage
-if __name__ == "__main__":
-    print("=== Basic Table Names ===")
-    table_names = get_db_table_names()
-    print(table_names)
-    print()
-
-    print("=== Detailed Table Information ===")
-    detailed_info = get_detailed_table_info()
-    for table_name, info in detailed_info.items():
-        print(f"--- Table: {{table_name}} ---")
-
-        if "error" in info:
-            print(f"Error: {info['error']}")
-        else:
-            print("Columns:")
-            for col in info["columns"]:
-                print(f"  - {col['name']}: {col['type']} (nullable: {col['nullable']})")
-
-            if info["primary_key"]:
-                print(f"  Primary Key: {info['primary_key']}")
-
-            if info["foreign_keys"]:
-                print("  Foreign Keys:")
-                for fk in info["foreign_keys"]:
-                    print(
-                        f"    {fk['columns']} -> {fk['referred_table']}.{fk['referred_columns']}"
-                    )
-
-        if "sample_data_error" in info:
-            print(f"Sample data error: {info['sample_data_error']}")
-        else:
-            print(f"Sample data: {info['sample_data']}")
-
-        print("-" * 50)
-
-    print("=== Database Schema Overview ===")
-    schema_overview = get_schema_overview()
-    for table_name, columns in schema_overview.items():
-        print(f"{table_name}:")
-        if isinstance(columns, list):
-            for column in columns:
-                print(f"  {column['name']}: {column['type']}")
-        else:
-            print(f"  Error: {columns['error']}")
+# Compile
+graph = builder.compile()
 
 
-simple_text2sql.py
 
 
-from dotenv import load_dotenv
-from langchain_community.utilities.sql_database import SQLDatabase
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
-from typing_extensions import Annotated, List, TypedDict
+File Name: prompts.py
 
-import sys
-import os
-from pathlib import Path
+-----------------------------
 
-# Add current directory to path for imports when loaded as standalone module
-current_dir = Path(__file__).parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
+File Content: 
 
-from prompts import QA_SYSTEM_PROMPT, SQL_SYSTEM_PROMPT
-from utils import get_detailed_table_info, get_engine_for_chinook_db
+EXTRACTION_PROMPT = """Your task is to take notes gathered from web research and extract them into the following schema.
 
-load_dotenv(override=True)
+<schema>
+{{info}}
+</schema>
+
+Here are all the notes from research:
+
+<web_research_notes>
+{{notes}}
+</web_research_notes>
+"""
+
+QUERY_WRITER_PROMPT = """You are a search query generator tasked with creating targeted search queries to gather specific company information.
+
+Here is the company you are researching: {{company}}
+
+Generate at most {{max_search_queries}} search queries that will help gather the following information:
+
+<schema>
+{{info}}
+</schema>
+
+<user_notes>
+{{user_notes}}
+</user_notes>
+
+Your query should:
+1. Focus on finding factual, up-to-date company information
+2. Target official sources, news, and reliable business databases
+3. Prioritize finding information that matches the schema requirements
+4. Include the company name and relevant business terms
+5. Be specific enough to avoid irrelevant results
+
+Create a focused query that will maximize the chances of finding schema-relevant information."""
+
+INFO_PROMPT = """You are doing web research on a company, {{company}}. 
+
+The following schema shows the type of information we're interested in:
+
+<schema>
+{{info}}
+</schema>
+
+You have just scraped website content. Your task is to take clear, organized notes about the company, focusing on topics relevant to our interests.
+
+<Website contents>
+{{content}}
+</Website contents>
+
+Here are any additional notes from the user:
+<user_notes>
+{{user_notes}}
+</user_notes>
+
+Please provide detailed research notes that:
+1. Are well-organized and easy to read
+2. Focus on topics mentioned in the schema
+3. Include specific facts, dates, and figures when available
+4. Maintain accuracy of the original content
+5. Note when important information appears to be missing or unclear
+
+Remember: Don't try to format the output to match the schema - just take clear notes that capture all relevant information."""
+
+REFLECTION_PROMPT = """You are a research analyst tasked with reviewing the quality and completeness of extracted company information.
+
+Compare the extracted information with the required schema:
+
+<Schema>
+{{schema}}
+</Schema>
+
+Here is the extracted information:
+<extracted_info>
+{{info}}
+</extracted_info>
+
+Analyze if all required fields are present and sufficiently populated. Consider:
+1. Are any required fields missing?
+2. Are any fields incomplete or containing uncertain information?
+3. Are there fields with placeholder values or "unknown" markers?
+"""
 
 
-class OverallState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    schema: str
-    sql: str
-    records: List[dict]
 
 
-class InputState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
+File Name: state.py
+
+-----------------------------
+
+File Content: 
+
+from dataclasses import dataclass, field
+from typing import Any, Optional, Annotated
+import operator
 
 
-class OutputState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
+DEFAULT_EXTRACTION_SCHEMA = {
+    "title": "CompanyInfo",
+    "description": "Basic information about a company",
+    "type": "object",
+    "properties": {
+        "company_name": {
+            "type": "string",
+            "description": "Official name of the company",
+        },
+        "founding_year": {
+            "type": "integer",
+            "description": "Year the company was founded",
+        },
+        "founder_names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Names of the founding team members",
+        },
+        "product_description": {
+            "type": "string",
+            "description": "Brief description of the company's main product or service",
+        },
+        "funding_summary": {
+            "type": "string",
+            "description": "Summary of the company's funding history",
+        },
+    },
+    "required": ["company_name"],
+}
 
 
-def generate_sql(llm):
-    def _generate(state: OverallState) -> dict:
-        last_message = state["messages"][-1]
-        prompt = f"""Generate a SQL query for the following question:
-        Question: {{last_message.content}}
-        Schema: {{get_detailed_table_info()}}
-        SQL:
-        """
-        sql_query = llm.invoke(
-            [SystemMessage(SQL_SYSTEM_PROMPT)]
-            + state["messages"]
-            + [HumanMessage(prompt)]
-        )
-        sql_query = sql_query.content.replace("```sql", "").replace("```", "")
-        return {"sql": sql_query}
+@dataclass(kw_only=True)
+class InputState:
+    """Input state defines the interface between the graph and the user (external API)."""
 
-    return _generate
+    company: str
+    "Company to research provided by the user."
 
-
-def execute_sql(db):
-    def _execute(state: OverallState) -> dict:
-        records = db.run(state["sql"])
-        return {"records": records}
-
-    return _execute
-
-
-def generate_answer(llm):
-    def _answer(state: OverallState) -> dict:
-        last_message = state["messages"][-1]
-        prompt = f"Given the question: {last_message.content} and the database results: {state['records']}, provide a concise answer."
-        answer = llm.invoke(
-            [SystemMessage(QA_SYSTEM_PROMPT)]
-            + state["messages"]
-            + [HumanMessage(prompt)]
-        )
-        return {"messages": [answer]}
-
-    return _answer
-
-
-def create_agent(llm, db):
-    builder = StateGraph(
-        OverallState, input_schema=InputState, output_schema=OutputState
+    extraction_schema: dict[str, Any] = field(
+        default_factory=lambda: DEFAULT_EXTRACTION_SCHEMA
     )
-    builder.add_node("generate_sql", generate_sql(llm))
-    builder.add_node("execute_sql", execute_sql(db))
-    builder.add_node("generate_answer", generate_answer(llm))
-    builder.add_edge(START, "generate_sql")
-    builder.add_edge("generate_sql", "execute_sql")
-    builder.add_edge("execute_sql", "generate_answer")
-    builder.add_edge("generate_answer", END)
-    return builder.compile()
+    "The json schema defines the information the agent is tasked with filling out."
+
+    user_notes: Optional[dict[str, Any]] = field(default=None)
+    "Any notes from the user to start the research process."
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-db = SQLDatabase(get_engine_for_chinook_db())
-agent = create_agent(llm, db)
+@dataclass(kw_only=True)
+class OverallState:
+    """Input state defines the interface between the graph and the user (external API)."""
 
-# Export as 'app' as required by the test framework
-app = agent
+    company: str
+    "Company to research provided by the user."
+
+    extraction_schema: dict[str, Any] = field(
+        default_factory=lambda: DEFAULT_EXTRACTION_SCHEMA
+    )
+    "The json schema defines the information the agent is tasked with filling out."
+
+    user_notes: str = field(default=None)
+    "Any notes from the user to start the research process."
+
+    search_queries: list[str] = field(default=None)
+    "List of generated search queries to find relevant information"
+
+    search_results: list[dict] = field(default=None)
+    "List of search results"
+
+    completed_notes: Annotated[list, operator.add] = field(default_factory=list)
+    "Notes from completed research related to the schema"
+
+    info: dict[str, Any] = field(default=None)
+    """
+    A dictionary containing the extracted and processed information
+    based on the user's query and the graph's execution.
+    This is the primary output of the enrichment process.
+    """
+
+    is_satisfactory: bool = field(default=None)
+    "True if all required fields are well populated, False otherwise"
+
+    reflection_steps_taken: int = field(default=0)
+    "Number of times the reflection node has been executed"
+
+
+@dataclass(kw_only=True)
+class OutputState:
+    """The response object for the end user.
+
+    This class defines the structure of the output that will be provided
+    to the user after the graph's execution is complete.
+    """
+
+    info: dict[str, Any]
+    """
+    A dictionary containing the extracted and processed information
+    based on the user's query and the graph's execution.
+    This is the primary output of the enrichment process.
+    """
+
+    search_results: list[dict] = field(default=None)
+    "List of search results"
+
+
+
+
+File Name: utils.py
+
+-----------------------------
+
+File Content: 
+
+def deduplicate_sources(search_response: dict | list[dict]) -> list[dict]:
+    """
+    Takes either a single search response or list of responses from Tavily API and de-duplicates them based on the URL.
+
+    Args:
+        search_response: Either:
+            - A dict with a 'results' key containing a list of search results
+            - A list of dicts, each containing search results
+
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Convert input to list of results
+    if isinstance(search_response, dict):
+        sources_list = search_response["results"]
+    elif isinstance(search_response, list):
+        sources_list = []
+        for response in search_response:
+            if isinstance(response, dict) and "results" in response:
+                sources_list.extend(response["results"])
+            else:
+                sources_list.extend(response)
+    else:
+        raise ValueError(
+            "Input must be either a dict with 'results' or a list of search results"
+        )
+
+    # Deduplicate by URL
+    unique_urls = set()
+    unique_sources_list = []
+    for source in sources_list:
+        if source["url"] not in unique_urls:
+            unique_urls.add(source["url"])
+            unique_sources_list.append(source)
+
+    return unique_sources_list
+
+
+def format_sources(
+    sources_list: list[dict],
+    include_raw_content: bool = True,
+    max_tokens_per_source: int = 1000,
+) -> str:
+    """
+    Takes a list of unique results from Tavily API and formats them.
+    Limits the raw_content to approximately max_tokens_per_source.
+    include_raw_content specifies whether to include the raw_content from Tavily in the formatted string.
+
+    Args:
+        sources_list: list of unique results from Tavily API
+        max_tokens_per_source: int, maximum number of tokens per each search result to include in the formatted string
+        include_raw_content: bool, whether to include the raw_content from Tavily in the formatted string
+
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Format output
+    formatted_text = "Sources:\n\n"
+    for source in sources_list:
+        formatted_text += f"Source {source['title']}:\n===\n"
+        formatted_text += f"URL: {source['url']}\n===\n"
+        formatted_text += (
+            f"Most relevant content from source: {source['content']}\n===\n"
+        )
+        if include_raw_content:
+            # Using rough estimate of 4 characters per token
+            char_limit = max_tokens_per_source * 4
+            # Handle None raw_content
+            raw_content = source.get("raw_content", "")
+            if raw_content is None:
+                raw_content = ""
+                print(f"Warning: No raw_content found for source {source['url']}")
+            if len(raw_content) > char_limit:
+                raw_content = raw_content[:char_limit] + "... [truncated]"
+            formatted_text += f"Full source content limited to {{max_tokens_per_source}} tokens: {{raw_content}}\n\n"
+
+    return formatted_text.strip()
+
+
+def format_all_notes(completed_notes: list[str]) -> str:
+    """Format a list of notes into a string"""
+    formatted_str = ""
+    for idx, company_notes in enumerate(completed_notes, 1):
+        formatted_str += f"""
+{'='*60}
+Note: {idx}:
+{'='*60}
+Notes from research:
+{company_notes}"""
+    return formatted_str
+
+
+
 '''

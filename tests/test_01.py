@@ -8,7 +8,7 @@ import hashlib
 import urllib.parse
 import pytest
 from langchain_core.messages import HumanMessage
-from test_utils.test_state import INITIAL_STATE, TEST_STATES
+from test_utils.test_state import INITIAL_STATE, TEST_STATES, MINIMAL_STATE
 from pydantic import BaseModel
 from langchain_anthropic import ChatAnthropic
 from test_utils.git_branch import get_git_branch
@@ -69,8 +69,8 @@ def __llm_as_judge(test_response, expected_response):
     response = structured_llm.invoke(prompt)
     return response.match, response.reasoning
 
-def _out_parser(out):
-    return out["final_answer"]
+def company_object_parser(out):
+    return dict(out["company_info"])
 
 LLM_HOST_ALLOWLIST = [
     "api.openai.com",   
@@ -79,6 +79,10 @@ LLM_HOST_ALLOWLIST = [
     "aiplatform.googleapis.com",
     "openai.azure.com",
     "api.cohere.ai", "cohere.ai",
+]
+
+TAVILY_HOST_ALLOWLIST = [
+    "api.tavily.com",
 ]
 
 # unverified code
@@ -142,12 +146,23 @@ class HttpSpy:
             if any(h in host for h in LLM_HOST_ALLOWLIST):
                 hits.append(url)
         return hits
+    
+    def tavily_calls(self):
+        hits = []
+        for url in self.urls:
+            try:
+                host = urllib.parse.urlparse(url).netloc
+            except Exception:
+                continue
+            if any(h in host for h in TAVILY_HOST_ALLOWLIST):
+                hits.append(url)
+        return hits
 
 def test_basics(monkeypatch):
     score = {"candidate": CANDIDATE_NAME, "bucket": "basic", "points": 0, "max_points": 22, "details": []}
     failures = []
 
-    # A) Config validation (4 pts) — soft: record and continue
+    # A) Config validation (4 pts)
     try:
         import langgraph_cli.config as lgc
         cfg_env = os.getenv("LG_CONFIG_PATH", "").strip()
@@ -160,7 +175,7 @@ def test_basics(monkeypatch):
         _add(score, 4, "config_validate", False, f"{type(e).__name__}: {e}")
         failures.append(f"Config validation failed: {e}")
 
-    # B) Real LLM call happens during invoke (2 pts) — soft: record and continue
+    # B) Real LLM call happens during invoke (2 pts)
     try:
         agent_path_env = os.getenv("CANDIDATE_AGENT_PATH", "").strip()
         agent_py_path = pathlib.Path(agent_path_env) if agent_path_env else DEFAULT_AGENT_PATH
@@ -185,192 +200,91 @@ def test_basics(monkeypatch):
         _add(score, 2, "llm_network_call", False, f"invoke failed: {type(e).__name__}: {e}")
         failures.append(f"Invoke/LLM check failed: {e}")
 
-    # C) Database integrity tests (6 pts total)
-    db_integrity_score = 0
-    db_integrity_failures = []
+    # C) Accepts minimal state (2 pts)
+    try:
+        state = MINIMAL_STATE
+        out = app.invoke(state)
+        is_ok = isinstance(out, dict)
+        _add(score, 2, "accepts_minimal_state", is_ok, "Accepts minimal state" if is_ok else "Does not accept minimal state")
+        with open("txt_dump/accepts_minimal_state.txt", "w") as f:
+            f.write(str(out))
+    except Exception as e:
+        _add(score, 2, "accepts_minimal_state", False, f"Invoke failed: {type(e).__name__}: {e}")
+        failures.append(f"Accepts minimal state failed: {e}")
+
     
-    # C.1) Artist count test (2 pts)
+    # D) company object has all the requested properties
     try:
-        state = TEST_STATES["c_1"]
+        state = INITIAL_STATE
         out = app.invoke(state)
-        with open("txt_dump/artist_count_test.txt", "w") as f:
+        with open("txt_dump/company_object_has_all_properties.txt", "w") as f:
             f.write(str(out))
-        response = _out_parser(out)
-
-        ok = "275" in response
-        if ok:
-            db_integrity_score += 2
+        response = company_object_parser(out)
+        required_props = ["company_name", "founding_year", "founder_names", "product_description", "funding_summary", "notable_customers"]
+        present_props = [prop for prop in required_props if prop in response]
+        property_score = len(present_props)  # 1 point per property, max 6 (since we have 6 properties)
+        if property_score == len(required_props):
+            message = "Company object has all the requested properties: " + str(present_props)
         else:
-            db_integrity_failures.append("Artist count test: response does not contain 275")
+            missing_props = [prop for prop in required_props if prop not in response]
+            message = f"Company object missing properties: {', '.join(missing_props)} (has {len(present_props)}/{len(required_props)} properties)"
+        
+        _add(score, property_score, "company_object_has_all_properties", property_score > 0, message)
+        if property_score < len(required_props):
+            failures.append(message)
     except Exception as e:
-        db_integrity_failures.append(f"Artist count test failed: {e}")
+        _add(score, 0, "company_object_has_all_properties", False, f"Invoke failed: {type(e).__name__}: {e}")
+        failures.append(f"Company object has all the requested properties failed: {e}")
 
-    # C.2) Album existence test (2 pts)
-    try:
-        state = TEST_STATES["c_2"]
-        out = app.invoke(state)
-        with open("txt_dump/album_existence_test.txt", "w") as f:
-            f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = "347" in response
-        if ok:
-            db_integrity_score += 2
-        else:
-            db_integrity_failures.append("Album existence test: response does not contain 347")
-    except Exception as e:
-        db_integrity_failures.append(f"Album existence test failed: {e}")
-
-    # C.3) Highest track price test (2 pts)
-    try:
-        state = TEST_STATES["c_3"]
-        out = app.invoke(state)
-        with open("txt_dump/highest_price_test.txt", "w") as f:
-            f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = "1.99" in response
-        if ok:
-            db_integrity_score += 2
-        else:
-            db_integrity_failures.append("Highest price test: response does not contain 1.99")
-    except Exception as e:
-        db_integrity_failures.append(f"Highest price test failed: {e}")
-
-    # Add combined database integrity score
-    _add(score, db_integrity_score, "database_integrity_tests", db_integrity_score != 0,
-         f"Passed {db_integrity_score}/6 points" if db_integrity_score != 0 else "All database integrity tests failed")
-    if db_integrity_failures:
-        failures.extend(db_integrity_failures)
-
-    # D.1) Simple query with processing
-    try:
-        state = TEST_STATES["d_1"]
-        out = app.invoke(state)
-        with open("txt_dump/simple_query_with_processing.txt", "w") as f:
-            f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok, reasoning = __llm_as_judge(response, "The average invoice total per country, excluding countries with less than 5 invoices.")
-        _add(score, 2, "simple_query_with_processing", ok,
-             f"response: {response}\nreasoning: {reasoning}")
-        if not ok:
-            failures.append(f"Response does not contain the expected information: {response}\nreasoning: {reasoning}")
-    except Exception as e:
-        _add(score, 2, "simple_query_with_processing", False, f"invoke failed: {type(e).__name__}: {e}")
-        failures.append(f"Simple query with processing failed: {e}")
-
-
-    # E) JOIN query tests (4 pts total)
-    join_score = 0
-    join_failures = []
     
-    # E.1) Multi-table customer search (2 pts)
+    # E) all company properties hold information
     try:
-        state = TEST_STATES["e_1"]
-        customers = [
-            "Leonie Köhler",
-            "Phil Hughes", 
-            "Daan Peeters",
-            "Kara Nielsen",
-            "Alexandre Rocha",
-            "Fernanda Ramos",
-            "Jack Smith",
-            "John Gordon",
-            "Marc Dubois",
-            "Ellie Sullivan",
-            "Lucas Mancini",
-            "Johannes Van der Berg",
-            "Enrique Muñoz",
-            "Emma Jones",
-            "Diego Gutiérrez",
-            "François Tremblay",
-            "Madalena Sampaio",
-            "Hannah Schneider",
-            "Patrick Gray",
-            "Julia Barnett",
-            "Edward Francis",
-            "Aaron Mitchell",
-            "Wyatt Girard",
-            "Frank Ralston",
-            "Frank Harris",
-            "Heather Leacock",
-            "Martha Silk"
-        ]
+        state = INITIAL_STATE
         out = app.invoke(state)
-        with open("txt_dump/metallica_customers_test.txt", "w") as f:
+        with open("txt_dump/all_company_properties_hold_information.txt", "w") as f:
             f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = all(customer in response for customer in customers)
-        if ok:
-            join_score += 2
+        response = company_object_parser(out)
+        required_props = ["company_name", "founding_year", "founder_names", "product_description", "funding_summary", "notable_customers"]
+        
+        # Check only the required properties that are present
+        empty_props = []
+        for prop in required_props:
+            if prop in response and not response[prop]:
+                empty_props.append(prop)
+        
+        properties_with_info = len([prop for prop in required_props if prop in response and response[prop]])
+        
+        if empty_props:
+            message = f"Company object has empty properties: {', '.join(empty_props)} (properties with info: {properties_with_info}/{len(required_props)})"
         else:
-            join_failures.append("Metallica customers test: response does not contain all expected customers")
+            present_props = [prop for prop in required_props if prop in response]
+            message = f"All present company properties have information (properties with info: {len(present_props)}/{len(required_props)})"
+
+        _add(score, properties_with_info, "all_company_properties_hold_information", properties_with_info > 0, message)
+        if empty_props:
+            failures.append(message)
     except Exception as e:
-        join_failures.append(f"Metallica customers test failed: {e}")
+        _add(score, 0, "all_company_properties_hold_information", False, f"Invoke failed: {type(e).__name__}: {e}")
+        failures.append(f"All company properties hold information failed: {e}")
 
-    # E.2) Complex aggregation with JOINs (2 pts)
+
+    # F) Request to Tavily API (2 pts)
     try:
-        state = TEST_STATES["e_2"]
+        state = INITIAL_STATE
         out = app.invoke(state)
-        with open("txt_dump/top_sales_rep_test.txt", "w") as f:
+        with open("txt_dump/tavily_api_call.txt", "w") as f:
             f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = "Jane Peacock" in response and "833.04" in response
-        if ok:
-            join_score += 2
-        else:
-            join_failures.append("Top sales rep test: response does not contain Jane Peacock and 833.04")
-    except Exception as e:
-        join_failures.append(f"Top sales rep test failed: {e}")
-
-    # Add combined JOIN score
-    _add(score, join_score, "join_query_tests", join_score != 0,
-         f"Passed {join_score}/4 points" if join_score != 0 else f"All JOIN tests failed: {join_failures}")
-    if join_failures:
-        failures.extend(join_failures) 
-
-    # F.1) Date range query test
-    try:
-        state = TEST_STATES["f_1"]
-        employees = [
-            "Andrew Adams",
-            "Nancy Edwards", 
-            "Jane Peacock",
-            "Margaret Park"
-        ]
-        out = app.invoke(state)
-        with open("txt_dump/date_range_query_test.txt", "w") as f:
-            f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = all(employee in response for employee in employees)
-        _add(score, 2, "date_range_query_test", ok,
-             f"response: {response}" if ok else "response does not contain all employees")
+        tavily_hits = spy.tavily_calls()
+        with open("txt_dump/tavily_calls.txt", "w") as f:
+            f.write(str(tavily_hits))
+        ok = len(tavily_hits) > 0
+        _add(score, 2, "tavily_api_call", ok,
+             f"Tavily API calls detected: {len(tavily_hits)}" if ok else "No Tavily API calls detected during invoke")
         if not ok:
-            failures.append("Response does not contain all employees")
+            failures.append("No outbound Tavily API calls observed during invoke.")
     except Exception as e:
-        _add(score, 2, "date_range_query_test", False, f"invoke failed: {type(e).__name__}: {e}")
-        failures.append(f"Date range query test failed: {e}")
-
-    # F.2) Reject irrelevant queries
-    try:
-        state = TEST_STATES["f_2"]
-        out = app.invoke(state)
-        with open("txt_dump/reject_irrelevant_queries.txt", "w") as f:
-            f.write(str(out))
-        #response = out["messages"][-1].content
-        response = _out_parser(out)
-        ok = "don't know" in response.lower() or "cannot" in response.lower() or "unable" in response.lower()
-        _add(score, 2, "reject_irrelevant_queries", ok,
-             f"response: {response}" if ok else f"response: {response}. It does not contain 'don't know'")
-        if not ok:
-            failures.append(f"Response does not contain 'don't know': {response}")
-    except Exception as e:
-        _add(score, 2, "reject_irrelevant_queries", False, f"invoke failed: {type(e).__name__}: {e}")
-        failures.append(f"Reject irrelevant queries test failed: {e}")
+        _add(score, 2, "tavily_api_call", False, f"invoke failed: {type(e).__name__}: {e}")
+        failures.append(f"Tavily API call test failed: {e}")
 
     _write_score(score)
     if failures:

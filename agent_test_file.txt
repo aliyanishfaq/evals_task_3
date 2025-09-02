@@ -1,281 +1,338 @@
-"""
-LangGraph-based Text-to-SQL Agent for Chinook Database
-"""
-import sqlite3
-import re
-from typing import List, Dict, Any, TypedDict
+import asyncio
+from typing import List, Dict, Any, TypedDict, Optional
 from pydantic import BaseModel, Field
-import requests
-
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
-from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import MessagesState
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_anthropic import ChatAnthropic
+from tavily import TavilyClient
+import concurrent.futures
+import json
 
+# Configuration constants
+MAX_SEARCH_QUERIES = 5
+MAX_SEARCH_RESULTS = 3
+MAX_REFLECTION_STEPS = 2
 
-class SQLQuery(BaseModel):
-    """Structured output for SQL generation"""
-    sql_query: str = Field(description="The generated SQL query")
-    confidence: str = Field(description="High/Medium/Low confidence in the query")
-    explanation: str = Field(description="Brief explanation of what the query does")
+class CompanyInfo(BaseModel):
+    """Structured company information to be gathered"""
+    company_name: str = Field(description="Official name of the company")
+    founding_year: Optional[int] = Field(None, description="Year the company was founded")
+    founder_names: List[str] = Field(default_factory=list, description="Names of the founding team members")
+    product_description: Optional[str] = Field(None, description="Brief description of the company's main product or service")
+    funding_summary: Optional[str] = Field(None, description="Summary of the company's funding history")
+    notable_customers: Optional[str] = Field(None, description="Known customers that use company's product/service")
 
-
-class TextToSQLState(TypedDict):
-    """State for the text-to-SQL agent"""
+class ResearchState(TypedDict):
+    """State for the company research workflow"""
     messages: List[BaseMessage]
-    user_query: str
-    sql_query: str
-    sql_result: Any
-    final_answer: str
+    company_name: str
+    notes: Optional[str]
+    company_info: Optional[CompanyInfo]
+    search_queries_used: int
+    search_results: List[Dict[str, Any]]
+    reflection_count: int
+    is_complete: bool
 
+def initialize_research(state: ResearchState) -> Dict[str, Any]:
+    """Initialize the research process"""
+    messages = state.get("messages", [])
+    
+    # Extract company name from the latest human message
+    if messages:
+        latest_message = messages[-1]
+        if isinstance(latest_message, HumanMessage):
+            content = latest_message.content
+            # Simple extraction - in real implementation, you'd parse this more robustly
+            company_name = state.get("company_name", "")
+            notes = state.get("notes", "")
+    
+    initial_company_info = CompanyInfo(company_name=state["company_name"])
+    
+    system_msg = SystemMessage(content=f"""You are a company researcher. Your task is to gather comprehensive information about {state['company_name']}.
+    
+    User notes: {state.get('notes', 'None provided')}
+    
+    You need to collect the following information:
+    - Company name (official name)
+    - Founding year
+    - Founder names
+    - Product/service description
+    - Funding history summary
+    - Notable customers
+    
+    You have access to web search and will work systematically to gather this information.""")
+    
+    return {
+        "messages": add_messages(state["messages"], [system_msg]),
+        "company_info": initial_company_info,
+        "search_queries_used": 0,
+        "search_results": [],
+        "reflection_count": 0,
+        "is_complete": False
+    }
 
-class ChinookDatabase:
-    """Manages the in-memory Chinook SQLite database"""
+def generate_search_queries(state: ResearchState) -> Dict[str, Any]:
+    """Generate search queries to gather company information"""
+    model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
     
-    def __init__(self):
-        self.conn = sqlite3.connect(":memory:")
-        self.cursor = self.conn.cursor()
-        self._setup_database()
+    current_info = state["company_info"]
+    company_name = state["company_name"]
+    notes = state.get("notes", "")
+    queries_used = state["search_queries_used"]
+    remaining_queries = MAX_SEARCH_QUERIES - queries_used
     
-    def _setup_database(self):
-        """Download and setup the Chinook database"""
-        try:
-            response = requests.get("https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql")
-            response.raise_for_status()
-            sql_script = response.text
-            
-            # Execute the SQL script to create and populate the database
-            self.cursor.executescript(sql_script)
-            self.conn.commit()
-            
-        except Exception as e:
-            print(f"Error setting up database: {e}")
-            raise
+    # Determine what information we still need
+    missing_info = []
+    if not current_info.founding_year:
+        missing_info.append("founding year")
+    if not current_info.founder_names:
+        missing_info.append("founders")
+    if not current_info.product_description:
+        missing_info.append("products/services")
+    if not current_info.funding_summary:
+        missing_info.append("funding history")
+    if not current_info.notable_customers:
+        missing_info.append("customers")
     
-    def execute_query(self, query: str) -> List[Dict]:
-        """Execute a SQL query and return results"""
-        try:
-            # Security check - only allow SELECT statements
-            if not query.strip().upper().startswith('SELECT'):
-                return {"error": "Only SELECT queries are allowed"}
-            
-            self.cursor.execute(query)
-            columns = [description[0] for description in self.cursor.description]
-            rows = self.cursor.fetchall()
-            
-            # Convert to list of dictionaries
-            result = []
-            for row in rows:
-                result.append(dict(zip(columns, row)))
-            
-            return result
-            
-        except Exception as e:
-            return {"error": str(e)}
+    prompt = f"""Generate {min(remaining_queries, 3)} specific search queries to find information about {company_name}.
     
-    def get_schema_info(self) -> str:
-        """Get detailed schema information for the database"""
-        schema_info = []
+    Missing information: {', '.join(missing_info) if missing_info else 'General company information'}
+    User notes: {notes}
+    
+    Return only the search queries, one per line. Focus on the most important missing information first.
+    Make queries specific and likely to return relevant results."""
+    
+    message = HumanMessage(content=prompt)
+    response = model.invoke([message])
+    
+    # Parse queries from response
+    queries = [q.strip() for q in response.content.split('\n') if q.strip()]
+    queries = queries[:remaining_queries]  # Respect remaining query limit
+    
+    search_msg = AIMessage(content=f"Generated {len(queries)} search queries: {', '.join(queries)}")
+    
+    return {
+        "messages": add_messages(state["messages"], [search_msg]),
+        "generated_queries": queries
+    }
+
+def execute_searches(state: ResearchState) -> Dict[str, Any]:
+    """Execute web searches in parallel using Tavily"""
+    queries = state.get("generated_queries", [])
+    
+    if not queries:
+        return {"search_results": state["search_results"]}
+    
+    try:
+        tavily_client = TavilyClient()
         
-        # Get all table names
-        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = self.cursor.fetchall()
+        # Execute searches in parallel
+        def search_single_query(query):
+            try:
+                result = tavily_client.search(
+                    query=query,
+                    search_depth="advanced",
+                    max_results=MAX_SEARCH_RESULTS
+                )
+                return {"query": query, "results": result.get("results", [])}
+            except Exception as e:
+                return {"query": query, "results": [], "error": str(e)}
         
-        for (table_name,) in tables:
-            schema_info.append(f"\n--- {table_name.upper()} TABLE ---")
-            
-            # Get column information
-            self.cursor.execute(f"PRAGMA table_info({table_name});")
-            columns = self.cursor.fetchall()
-            
-            for column in columns:
-                col_name, col_type, not_null, default, pk = column[1], column[2], column[3], column[4], column[5]
-                pk_info = " (PRIMARY KEY)" if pk else ""
-                null_info = " NOT NULL" if not_null else ""
-                default_info = f" DEFAULT {default}" if default else ""
-                schema_info.append(f"  {col_name}: {col_type}{pk_info}{null_info}{default_info}")
-            
-            # Get sample data (first 3 rows)
-            self.cursor.execute(f"SELECT * FROM {table_name} LIMIT 3;")
-            sample_rows = self.cursor.fetchall()
-            if sample_rows:
-                schema_info.append("  Sample data:")
-                for row in sample_rows:
-                    schema_info.append(f"    {row}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            search_results = list(executor.map(search_single_query, queries))
         
-        return "\n".join(schema_info)
-
-
-# Initialize database
-db = ChinookDatabase()
-
-# Initialize the model
-model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
-
-# Get schema information for the prompt
-SCHEMA_INFO = db.get_schema_info()
-
-SYSTEM_PROMPT = f"""You are a text-to-SQL expert for the Chinook music database. Your job is to convert natural language questions into accurate SQL queries.
-
-IMPORTANT CONSTRAINTS:
-- ONLY answer questions that can be answered using the Chinook database
-- If a question cannot be answered with the available data, respond with "I don't know the answer to that question"
-- NEVER discuss topics outside of the database content
-- Only generate SELECT queries (no INSERT, UPDATE, DELETE)
-
-DATABASE SCHEMA:
-{SCHEMA_INFO}
-
-The database contains information about:
-- Artists and their albums
-- Music tracks with genres and media types
-- Customers and their purchases (invoices)
-- Employees and their relationships
-- Playlists and playlist tracks
-
-When generating SQL:
-1. Use proper table joins when needed
-2. Be careful with column names and table relationships
-3. Consider using LIMIT for queries that might return many rows
-4. Use appropriate WHERE clauses to filter results
-"""
-
-
-def sql_generation_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Generate SQL query from user input"""
-    user_query = state["user_query"]
-    
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Convert this question to a SQL query: {user_query}")
-    ]
-    
-    # Use structured output for reliable SQL generation
-    structured_llm = model.with_structured_output(SQLQuery)
-    result = structured_llm.invoke(messages)
-    
-    # Check if the query is relevant
-    if "don't know" in result.explanation.lower() or result.confidence == "Low":
+        # Flatten results
+        all_results = []
+        for search_result in search_results:
+            all_results.extend(search_result["results"])
+        
+        search_msg = AIMessage(content=f"Executed {len(queries)} searches and found {len(all_results)} results")
+        
         return {
-            "sql_query": "",
-            "messages": state["messages"] + [AIMessage(content="I don't know the answer to that question.")]
+            "messages": add_messages(state["messages"], [search_msg]),
+            "search_results": state["search_results"] + all_results,
+            "search_queries_used": state["search_queries_used"] + len(queries)
         }
-    
-    return {
-        "sql_query": result.sql_query,
-        "messages": state["messages"] + [AIMessage(content=f"Generated SQL: {result.sql_query}")]
-    }
-
-
-def sql_execution_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Execute the generated SQL query"""
-    if not state["sql_query"]:
-        return {"sql_result": None}
-    
-    result = db.execute_query(state["sql_query"])
-    
-    return {
-        "sql_result": result,
-        "messages": state["messages"] + [AIMessage(content=f"Query executed, got {len(result) if isinstance(result, list) else 'error'} results")]
-    }
-
-
-def response_generation_node(state: TextToSQLState) -> Dict[str, Any]:
-    """Generate natural language response based on SQL results"""
-    if not state["sql_result"]:
-        return {"final_answer": "I don't know the answer to that question."}
-    
-    if isinstance(state["sql_result"], dict) and "error" in state["sql_result"]:
-        return {"final_answer": "I encountered an error processing your query."}
-    
-    # Generate natural language response
-    messages = [
-        SystemMessage(content="""You are a helpful assistant that explains database query results in natural language.
         
-        Rules:
-        - Provide clear, concise answers based on the data
-        - If no results are found, say so politely
-        - Don't hallucinate information not in the results
-        - Keep responses focused and relevant"""),
-        HumanMessage(content=f"""
-        User question: {state['user_query']}
-        SQL query used: {state['sql_query']}
-        Results: {state['sql_result']}
-        
-        Please provide a natural language answer to the user's question based on these results.
-        """)
-    ]
+    except Exception as e:
+        error_msg = AIMessage(content=f"Error executing searches: {str(e)}")
+        return {
+            "messages": add_messages(state["messages"], [error_msg]),
+            "search_results": state["search_results"]
+        }
+
+def extract_information(state: ResearchState) -> Dict[str, Any]:
+    """Extract and update company information from search results"""
+    model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
     
-    response = model.invoke(messages)
+    search_results = state["search_results"]
+    current_info = state["company_info"]
+    company_name = state["company_name"]
+    
+    if not search_results:
+        return {"company_info": current_info}
+    
+    # Prepare search results context
+    results_context = ""
+    for i, result in enumerate(search_results[-10:]):  # Use last 10 results
+        results_context += f"Result {i+1}:\nTitle: {result.get('title', '')}\nContent: {result.get('content', '')}\nURL: {result.get('url', '')}\n\n"
+    
+    prompt = f"""Based on the search results below, extract and update information about {company_name}.
+
+Current information:
+{current_info.model_dump_json(indent=2)}
+
+Search Results:
+{results_context}
+
+Please extract and update the company information. Return the updated information in the same JSON structure.
+Only update fields where you have confident, specific information from the search results.
+For founder_names, provide a list of individual names.
+Keep existing information if no better information is found."""
+    
+    structured_llm = model.with_structured_output(CompanyInfo)
+    message = HumanMessage(content=prompt)
+    
+    try:
+        updated_info = structured_llm.invoke([message])
+        
+        extract_msg = AIMessage(content=f"Extracted information from {len(search_results)} search results")
+        
+        return {
+            "messages": add_messages(state["messages"], [extract_msg]),
+            "company_info": updated_info
+        }
+        
+    except Exception as e:
+        error_msg = AIMessage(content=f"Error extracting information: {str(e)}")
+        return {
+            "messages": add_messages(state["messages"], [error_msg]),
+            "company_info": current_info
+        }
+
+def reflect_on_completeness(state: ResearchState) -> Dict[str, Any]:
+    """Reflect on whether we have sufficient information"""
+    model = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+    
+    company_info = state["company_info"]
+    company_name = state["company_name"]
+    reflection_count = state["reflection_count"]
+    
+    # Check completeness
+    completeness_score = 0
+    total_fields = 6
+    
+    if company_info.company_name:
+        completeness_score += 1
+    if company_info.founding_year:
+        completeness_score += 1
+    if company_info.founder_names:
+        completeness_score += 1
+    if company_info.product_description:
+        completeness_score += 1
+    if company_info.funding_summary:
+        completeness_score += 1
+    if company_info.notable_customers:
+        completeness_score += 1
+    
+    completeness_percentage = (completeness_score / total_fields) * 100
+    
+    prompt = f"""Evaluate the completeness of our research on {company_name}.
+
+Current information:
+{company_info.model_dump_json(indent=2)}
+
+Completeness: {completeness_score}/{total_fields} fields ({completeness_percentage:.1f}%)
+Reflection count: {reflection_count}/{MAX_REFLECTION_STEPS}
+
+Is this information sufficient for a comprehensive company profile? 
+Consider:
+1. Do we have the core business information (product, founding)?
+2. Are there major gaps that would make this profile incomplete?
+3. Would additional searches likely yield significantly better information?
+
+Respond with 'COMPLETE' if sufficient, or 'CONTINUE' if we need more information."""
+    
+    message = HumanMessage(content=prompt)
+    response = model.invoke([message])
+    
+    is_complete = (
+        "COMPLETE" in response.content.upper() or 
+        completeness_percentage >= 70 or 
+        reflection_count >= MAX_REFLECTION_STEPS or
+        state["search_queries_used"] >= MAX_SEARCH_QUERIES
+    )
+    
+    reflection_msg = AIMessage(content=f"Reflection {reflection_count + 1}: {response.content}")
     
     return {
-        "final_answer": response.content,
-        "messages": state["messages"] + [AIMessage(content=response.content)]
+        "messages": add_messages(state["messages"], [reflection_msg]),
+        "reflection_count": reflection_count + 1,
+        "is_complete": is_complete
     }
 
+def finalize_research(state: ResearchState) -> Dict[str, Any]:
+    """Finalize the research and prepare final output"""
+    company_info = state["company_info"]
+    
+    final_msg = AIMessage(content=f"""Research completed for {company_info.company_name}.
 
-def should_execute_sql(state: TextToSQLState) -> str:
-    """Determine if we should execute the SQL query"""
-    if state["sql_query"]:
-        return "execute_sql"
+Final Company Profile:
+{json.dumps(company_info.model_dump(), indent=2)}
+
+Search queries used: {state['search_queries_used']}/{MAX_SEARCH_QUERIES}
+Reflection steps: {state['reflection_count']}/{MAX_REFLECTION_STEPS}
+Total search results processed: {len(state['search_results'])}""")
+    
+    return {
+        "messages": add_messages(state["messages"], [final_msg]),
+        "is_complete": True
+    }
+
+def should_continue_research(state: ResearchState) -> str:
+    """Routing function to determine next step"""
+    if state["is_complete"]:
+        return "finalize"
+    elif state["search_queries_used"] >= MAX_SEARCH_QUERIES:
+        return "finalize"
+    elif state["reflection_count"] >= MAX_REFLECTION_STEPS:
+        return "finalize"
     else:
-        return "generate_response"
-
+        return "generate_queries"
 
 # Build the graph
-graph_builder = StateGraph(TextToSQLState)
-
-# Add nodes
-graph_builder.add_node("generate_sql", sql_generation_node)
-graph_builder.add_node("execute_sql", sql_execution_node)
-graph_builder.add_node("generate_response", response_generation_node)
-
-# Add edges
-graph_builder.add_edge(START, "generate_sql")
-graph_builder.add_conditional_edges(
-    "generate_sql",
-    should_execute_sql,
-    {
-        "execute_sql": "execute_sql",
-        "generate_response": "generate_response"
-    }
-)
-graph_builder.add_edge("execute_sql", "generate_response")
-graph_builder.add_edge("generate_response", END)
-
-# Compile and export
-graph = graph_builder.compile()
-app = graph
-
-
-def run_query(user_question: str) -> str:
-    """Convenience function to run a single query"""
-    initial_state = {
-        "messages": [HumanMessage(content=user_question)],
-        "user_query": user_question,
-        "sql_query": "",
-        "sql_result": None,
-        "final_answer": ""
-    }
+def create_company_researcher():
+    workflow = StateGraph(ResearchState)
     
-    result = app.invoke(initial_state)
-    return result["final_answer"]
-
-
-if __name__ == "__main__":
-    # Test queries
-    test_queries = [
-        "How many artists are in the database?",
-        "What are the top 5 genres by number of tracks?",
-        "Who are the customers from Brazil?",
-        "What is the weather like today?"  # Should return "I don't know"
-    ]
+    # Add nodes
+    workflow.add_node("initialize", initialize_research)
+    workflow.add_node("generate_queries", generate_search_queries)
+    workflow.add_node("execute_searches", execute_searches)
+    workflow.add_node("extract_info", extract_information)
+    workflow.add_node("reflect", reflect_on_completeness)
+    workflow.add_node("finalize", finalize_research)
     
-    print("Testing Text-to-SQL Agent:")
-    print("=" * 50)
+    # Add edges
+    workflow.add_edge(START, "initialize")
+    workflow.add_edge("initialize", "generate_queries")
+    workflow.add_edge("generate_queries", "execute_searches")
+    workflow.add_edge("execute_searches", "extract_info")
+    workflow.add_edge("extract_info", "reflect")
     
-    for query in test_queries:
-        print(f"\nQ: {query}")
-        answer = run_query(query)
-        print(f"A: {answer}")
-        print("-" * 30)
+    # Conditional edge based on reflection
+    workflow.add_conditional_edges(
+        "reflect",
+        should_continue_research,
+        {
+            "generate_queries": "generate_queries",
+            "finalize": "finalize"
+        }
+    )
+    
+    workflow.add_edge("finalize", END)
+    
+    return workflow.compile()
+
+# Export the compiled graph as 'app'
+app = create_company_researcher()
