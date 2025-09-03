@@ -1,0 +1,68 @@
+{
+  "candidate": "claude-vanilla-1",
+  "bucket": "code_quality",
+  "points": 10.5,
+  "max_points": 22,
+  "details": [
+    {
+      "key": "code_quality_check",
+      "points": 0.5,
+      "passed": false,
+      "msg": "[LlmAsJudgeEvidence(issue='State is defined using Pydantic BaseModel instead of TypedDict which is the preferred approach for LangGraph', severity='major'), LlmAsJudgeEvidence(issue='Messages are stored as generic Dict[str, Any] instead of using proper LangGraph message types with Annotated[list, add_messages]', severity='major'), LlmAsJudgeEvidence(issue='All prompts are embedded directly in node classes instead of being separated into dedicated prompt files', severity='major'), LlmAsJudgeEvidence(issue='Multiple redundant files present (example_usage.py, test_basic.py, config.py) that are not essential for core functionality', severity='minor')]"
+    },
+    {
+      "key": "code_correctness_check",
+      "points": 6,
+      "passed": false,
+      "msg": "[LlmAsJudgeEvidence(issue=\"Reflection node does not properly connect back to web search - the conditional edge routes to 'generate_queries' instead of 'web_search', breaking the reflection loop\", severity='critical')]"
+    },
+    {
+      "key": "max_search_queries",
+      "points": 1,
+      "passed": true,
+      "msg": "Max search queries is present"
+    },
+    {
+      "key": "max_search_results",
+      "points": 1,
+      "passed": true,
+      "msg": "Max search results is present"
+    },
+    {
+      "key": "max_reflection_steps",
+      "points": 1,
+      "passed": true,
+      "msg": "Max reflection steps is present"
+    },
+    {
+      "key": "reflection_step",
+      "points": 1,
+      "passed": true,
+      "msg": "Reflection step is present"
+    },
+    {
+      "key": "functional_reflection",
+      "points": 0,
+      "passed": false,
+      "msg": "Functional reflection is not present"
+    },
+    {
+      "key": "no_redundant_files",
+      "points": 0,
+      "passed": false,
+      "msg": "No redundant files is not present"
+    },
+    {
+      "key": "preferred_state_type",
+      "points": 0,
+      "passed": false,
+      "msg": "Preferred state type is not present"
+    },
+    {
+      "key": "separate_prompts",
+      "points": 0,
+      "passed": false,
+      "msg": "Separate prompts is not present"
+    }
+  ]
+}

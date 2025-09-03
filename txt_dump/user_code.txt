@@ -1,461 +1,1032 @@
-File Name: database.py
+File Name: company_researcher.py
 
 -----------------------------
 
 File Content: 
 
-import sqlite3
-import requests
-from typing import List, Dict, Any
-
-class ChinookDatabase:
-    def __init__(self):
-        self.conn = None
-        self.schema_info = None
-        
-    def initialize_database(self) -> None:
-        """Download Chinook SQL and create in-memory database"""
-        url = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
-        
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            sql_content = response.text
-            
-            self.conn = sqlite3.connect(":memory:")
-            self.conn.executescript(sql_content)
-            self.conn.commit()
-            
-            self._extract_schema_info()
-            
-        except Exception as e:
-            raise Exception(f"Failed to initialize database: {str(e)}")
-    
-    def _extract_schema_info(self) -> None:
-        """Extract detailed schema information for SQL generation"""
-        cursor = self.conn.cursor()
-        
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [row[0] for row in cursor.fetchall()]
-        
-        schema_info = {}
-        for table in tables:
-            cursor.execute(f"PRAGMA table_info({table})")
-            columns = cursor.fetchall()
-            
-            cursor.execute(f"PRAGMA foreign_key_list({table})")
-            foreign_keys = cursor.fetchall()
-            
-            schema_info[table] = {
-                "columns": [
-                    {
-                        "name": col[1],
-                        "type": col[2],
-                        "not_null": bool(col[3]),
-                        "primary_key": bool(col[5])
-                    }
-                    for col in columns
-                ],
-                "foreign_keys": [
-                    {
-                        "column": fk[3],
-                        "referenced_table": fk[2],
-                        "referenced_column": fk[4]
-                    }
-                    for fk in foreign_keys
-                ]
-            }
-        
-        self.schema_info = schema_info
-    
-    def get_schema_description(self) -> str:
-        """Get detailed schema description for prompt"""
-        if not self.schema_info:
-            return "Database not initialized"
-        
-        description = "Database Schema for Chinook Music Store:\n\n"
-        
-        for table_name, table_info in self.schema_info.items():
-            description += f"Table: {table_name}\n"
-            description += "Columns:\n"
-            
-            for col in table_info["columns"]:
-                pk_indicator = " (PRIMARY KEY)" if col["primary_key"] else ""
-                null_indicator = " NOT NULL" if col["not_null"] else ""
-                description += f"  - {col['name']}: {col['type']}{pk_indicator}{null_indicator}\n"
-            
-            if table_info["foreign_keys"]:
-                description += "Foreign Keys:\n"
-                for fk in table_info["foreign_keys"]:
-                    description += f"  - {fk['column']} -> {fk['referenced_table']}.{fk['referenced_column']}\n"
-            
-            description += "\n"
-        
-        description += """
-Key Relationships:
-- Artists have Albums
-- Albums have Tracks
-- Tracks belong to Genres and MediaTypes
-- Customers place Invoices
-- Invoices contain InvoiceLines for Tracks
-- Employees can be assigned to Customers
-- Playlists contain Tracks via PlaylistTrack junction table
-"""
-        
-        return description
-    
-    def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute SQL query and return results as list of dictionaries"""
-        if not self.conn:
-            raise Exception("Database not initialized")
-        
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(sql)
-            
-            columns = [description[0] for description in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
-            
-            return [dict(zip(columns, row)) for row in rows]
-            
-        except sqlite3.Error as e:
-            raise Exception(f"SQL execution error: {str(e)}")
-    
-    def close(self):
-        """Close database connection"""
-        if self.conn:
-            self.conn.close()
-
-
-
-File Name: main.py
-
------------------------------
-
-File Content: 
-
-#!/usr/bin/env python3
-
-import sys
-from pathlib import Path
-
-current_dir = Path(__file__).parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
-
-from text_to_sql_agent import TextToSQLAgent
-
-agent = TextToSQLAgent()
-app = agent.graph
-
-def main():
-    """Main application entry point"""
-    print("🎵 Chinook Music Store SQL Agent")
-    print("Ask questions about artists, albums, tracks, customers, and sales!")
-    print("Type 'exit' or 'quit' to exit.\n")
-    
-    agent = TextToSQLAgent()
-    
-    try:
-        while True:
-            try:
-                user_input = input("❓ Your question: ").strip()
-                
-                if user_input.lower() in ['exit', 'quit', 'q']:
-                    print("👋 Goodbye!")
-                    break
-                
-                if not user_input:
-                    continue
-                
-                print("🤔 Thinking...")
-                response = agent.query(user_input)
-                print(f"💬 {response}\n")
-                
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                break
-            except EOFError:
-                print("\n👋 Goodbye!")
-                break
-    
-    finally:
-        agent.close()
-
-if __name__ == "__main__":
-    main()
-
-
-
-File Name: test_agent.py
-
------------------------------
-
-File Content: 
-
-#!/usr/bin/env python3
-
-"""
-Simple test script to verify the text-to-SQL agent functionality
-"""
-
-from text_to_sql_agent import TextToSQLAgent
+import asyncio
+import json
 import os
-
-def test_database_initialization():
-    """Test that database initializes correctly"""
-    print("Testing database initialization...")
-    agent = TextToSQLAgent()
-    
-    if agent.db.conn is None:
-        agent.db.initialize_database()
-    
-    schema = agent.db.get_schema_description()
-    print("✅ Database initialized successfully")
-    print(f"Schema contains {len(agent.db.schema_info)} tables")
-    agent.close()
-
-def test_sample_queries():
-    """Test sample queries"""
-    if not os.getenv("OPENAI_API_KEY"):
-        print("⚠️  OPENAI_API_KEY not set. Skipping LLM tests.")
-        print("Set your API key in .env file to test the full workflow.")
-        return
-    
-    print("\nTesting sample queries...")
-    agent = TextToSQLAgent()
-    
-    test_queries = [
-        "How many artists are in the database?",
-        "Show me all albums by AC/DC",
-        "What is the weather today?",  # Should be irrelevant
-        "List the top 5 most expensive tracks"
-    ]
-    
-    for query in test_queries:
-        print(f"\n🔍 Query: {query}")
-        try:
-            response = agent.query(query)
-            print(f"💬 Response: {response}")
-        except Exception as e:
-            print(f"❌ Error: {e}")
-    
-    agent.close()
-
-def main():
-    print("🧪 Testing Text-to-SQL Agent")
-    print("=" * 40)
-    
-    try:
-        test_database_initialization()
-        test_sample_queries()
-        print("\n✅ All tests completed!")
-        
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
-
-if __name__ == "__main__":
-    main()
-
-
-
-File Name: text_to_sql_agent.py
-
------------------------------
-
-File Content: 
-
-import os
-from typing import Dict, Any, List
-from dataclasses import dataclass
+from typing import Dict, Any
 from dotenv import load_dotenv
 
-from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage, SystemMessage
+from langgraph.graph import StateGraph, END
+from tavily import TavilyClient
 
-from database import ChinookDatabase
+from models import ResearchState, CompanyInfo
+from nodes import QueryGenerationNode, WebSearchNode, InformationExtractionNode, ReflectionNode
 
-load_dotenv()
 
-@dataclass
-class AgentState:
-    user_query: str
-    sql_query: str = ""
-    sql_results: List[Dict[str, Any]] = None
-    final_response: str = ""
-    error: str = ""
-    schema_info: str = ""
-
-class TextToSQLAgent:
-    def __init__(self):
-        self.db = ChinookDatabase()
+class CompanyResearcher:
+    """Main company researcher using LangGraph"""
+    
+    def __init__(
+        self, 
+        openai_api_key: str = None,
+        tavily_api_key: str = None,
+        model: str = "gpt-4",
+        max_search_queries: int = 8,
+        max_search_results: int = 50,
+        max_reflections: int = 3
+    ):
+        # Load environment variables
+        load_dotenv()
+        
+        # Initialize LLM
         self.llm = ChatOpenAI(
-            model="gpt-4-turbo-preview",
-            temperature=0,
-            api_key=os.getenv("OPENAI_API_KEY")
+            api_key=openai_api_key or os.getenv("OPENAI_API_KEY"),
+            model=model,
+            temperature=0.1
         )
+        
+        # Initialize Tavily client
+        self.tavily_client = TavilyClient(
+            api_key=tavily_api_key or os.getenv("TAVILY_API_KEY")
+        )
+        
+        # Configuration
+        self.max_search_queries = max_search_queries
+        self.max_search_results = max_search_results
+        self.max_reflections = max_reflections
+        
+        # Initialize nodes
+        self.query_node = QueryGenerationNode(self.llm)
+        self.search_node = WebSearchNode(self.tavily_client)
+        self.extraction_node = InformationExtractionNode(self.llm)
+        self.reflection_node = ReflectionNode(self.llm)
+        
+        # Build the graph
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow"""
-        workflow = StateGraph(AgentState)
         
-        workflow.add_node("generate_sql", self.generate_sql_node)
-        workflow.add_node("execute_sql", self.execute_sql_node)
-        workflow.add_node("generate_response", self.generate_response_node)
-        workflow.add_node("handle_error", self.handle_error_node)
+        # Create the state graph
+        workflow = StateGraph(ResearchState)
         
-        workflow.set_entry_point("generate_sql")
+        # Add nodes
+        workflow.add_node("generate_queries", self.query_node)
+        workflow.add_node("web_search", self.search_node) 
+        workflow.add_node("extract_info", self.extraction_node)
+        workflow.add_node("reflect", self.reflection_node)
         
-        workflow.add_edge("generate_sql", "execute_sql")
+        # Define the workflow edges
+        workflow.set_entry_point("generate_queries")
+        
+        # Generate queries -> Web search
+        workflow.add_edge("generate_queries", "web_search")
+        
+        # Web search -> Extract information
+        workflow.add_edge("web_search", "extract_info")
+        
+        # Extract information -> Reflect
+        workflow.add_edge("extract_info", "reflect")
+        
+        # Conditional edge from reflect
+        def should_continue(state: ResearchState) -> str:
+            """Determine if research should continue"""
+            if state.research_complete:
+                return END
+            else:
+                return "generate_queries"  # Generate more queries
+        
         workflow.add_conditional_edges(
-            "execute_sql",
-            self._should_continue_after_sql,
-            {
-                "generate_response": "generate_response",
-                "handle_error": "handle_error"
-            }
+            "reflect",
+            should_continue
         )
-        workflow.add_edge("generate_response", END)
-        workflow.add_edge("handle_error", END)
         
         return workflow.compile()
     
-    def _should_continue_after_sql(self, state: AgentState) -> str:
-        """Decide whether to continue to response generation or handle error"""
-        return "handle_error" if state.error else "generate_response"
+    async def research_company(
+        self, 
+        company_name: str, 
+        user_notes: str = None
+    ) -> Dict[str, Any]:
+        """Research a company and return structured information"""
+        
+        # Initialize state
+        initial_state = ResearchState(
+            company_name=company_name,
+            user_notes=user_notes,
+            company_info=CompanyInfo(company_name=company_name),
+            max_search_queries=self.max_search_queries,
+            max_search_results=self.max_search_results,
+            max_reflections=self.max_reflections
+        )
+        
+        print(f"🔍 Starting research for: {company_name}")
+        if user_notes:
+            print(f"📝 User notes: {user_notes}")
+        
+        # Run the graph
+        final_state = await self.graph.ainvoke(initial_state)
+        
+        # Prepare results
+        results = {
+            "company_info": final_state.company_info.model_dump(),
+            "research_summary": {
+                "queries_executed": final_state.queries_executed,
+                "max_queries": final_state.max_search_queries,
+                "results_collected": len(final_state.search_results),
+                "reflections_done": final_state.reflections_done,
+                "research_complete": final_state.research_complete
+            },
+            "messages": final_state.messages,
+            "search_queries": [q.model_dump() for q in final_state.search_queries_generated]
+        }
+        
+        return results
     
-    def generate_sql_node(self, state: AgentState) -> AgentState:
-        """Generate SQL query from natural language"""
-        if not self.db.conn:
-            self.db.initialize_database()
+    def print_results(self, results: Dict[str, Any]) -> None:
+        """Print formatted research results"""
         
-        schema_info = self.db.get_schema_description()
-        state.schema_info = schema_info
+        company_info = results["company_info"]
+        summary = results["research_summary"]
         
-        system_prompt = f"""You are a SQL expert specializing in the Chinook music store database.
+        print("\n" + "="*50)
+        print(f"📊 COMPANY RESEARCH RESULTS")
+        print("="*50)
+        
+        print(f"\n🏢 Company: {company_info['company_name']}")
+        
+        if company_info.get('founding_year'):
+            print(f"📅 Founded: {company_info['founding_year']}")
+        
+        if company_info.get('founder_names'):
+            founders = ", ".join(company_info['founder_names'])
+            print(f"👥 Founders: {founders}")
+        
+        if company_info.get('product_description'):
+            print(f"🚀 Product: {company_info['product_description']}")
+        
+        if company_info.get('funding_summary'):
+            print(f"💰 Funding: {company_info['funding_summary']}")
+        
+        if company_info.get('notable_customers'):
+            print(f"🤝 Customers: {company_info['notable_customers']}")
+        
+        print(f"\n📈 Research Summary:")
+        print(f"   • Search queries: {summary['queries_executed']}/{summary['max_queries']}")
+        print(f"   • Results collected: {summary['results_collected']}")
+        print(f"   • Reflections: {summary['reflections_done']}")
+        print(f"   • Complete: {'✅' if summary['research_complete'] else '❌'}")
+        
+        print("\n" + "="*50)
 
-{schema_info}
 
-Your task is to convert natural language queries into valid SQLite queries for this database.
+# Convenience function for quick research
+async def research_company(
+    company_name: str,
+    user_notes: str = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """Quick research function"""
+    researcher = CompanyResearcher(**kwargs)
+    return await researcher.research_company(company_name, user_notes)
 
-IMPORTANT RULES:
-1. Only generate queries that can be answered using this database schema
-2. If the query is unrelated to music, artists, albums, tracks, customers, invoices, or employees, respond with: "IRRELEVANT_QUERY"
-3. Return only the SQL query, no explanation
-4. Use proper SQLite syntax
-5. Use JOINs when accessing related data across tables
-6. Be precise with column names and table relationships
 
-Examples:
-- "Show me all albums by AC/DC" -> SELECT Album.Title FROM Album JOIN Artist ON Album.ArtistId = Artist.ArtistId WHERE Artist.Name = 'AC/DC'
-- "What are the most expensive tracks?" -> SELECT Name, UnitPrice FROM Track ORDER BY UnitPrice DESC LIMIT 10
+if __name__ == "__main__":
+    # Example usage
+    async def main():
+        # Example research
+        results = await research_company(
+            company_name="OpenAI",
+            user_notes="Focus on recent developments and partnerships"
+        )
+        
+        # Print results
+        researcher = CompanyResearcher()
+        researcher.print_results(results)
+        
+        # Save to file
+        with open("research_results.json", "w") as f:
+            json.dump(results, f, indent=2)
+        
+        print(f"\n💾 Results saved to: research_results.json")
+    
+    # Run the example
+    asyncio.run(main())
+
+
+
+File Name: config.py
+
+-----------------------------
+
+File Content: 
+
+"""Configuration settings for the Company Researcher"""
+
+from typing import Dict, Any
+from dataclasses import dataclass
+
+
+@dataclass
+class ResearchConfig:
+    """Configuration for research parameters"""
+    
+    # API Configuration
+    openai_model: str = "gpt-4"
+    openai_temperature: float = 0.1
+    
+    # Search Limits
+    max_search_queries: int = 8
+    max_search_results: int = 50
+    max_reflections: int = 3
+    
+    # Concurrent Search Settings
+    max_concurrent_searches: int = 3
+    
+    # Search Settings
+    tavily_search_depth: str = "basic"  # "basic" or "advanced"
+    tavily_max_results_per_query: int = 5
+    
+    # Content Processing
+    max_content_length: int = 500  # Characters per search result
+    recent_results_window: int = 10  # Number of recent results to process
+    
+    # Validation
+    min_required_fields: int = 2  # Minimum fields required to consider research complete
+    
+
+class DefaultConfigs:
+    """Pre-configured settings for different use cases"""
+    
+    @staticmethod
+    def quick_research() -> ResearchConfig:
+        """Fast research with minimal queries"""
+        return ResearchConfig(
+            max_search_queries=4,
+            max_search_results=20,
+            max_reflections=1,
+            tavily_max_results_per_query=3
+        )
+    
+    @staticmethod
+    def thorough_research() -> ResearchConfig:
+        """Comprehensive research with more queries"""
+        return ResearchConfig(
+            max_search_queries=12,
+            max_search_results=80,
+            max_reflections=5,
+            tavily_search_depth="advanced",
+            tavily_max_results_per_query=7
+        )
+    
+    @staticmethod
+    def balanced_research() -> ResearchConfig:
+        """Default balanced approach"""
+        return ResearchConfig()
+
+
+# Environment variable requirements
+REQUIRED_ENV_VARS = [
+    "OPENAI_API_KEY",
+    "TAVILY_API_KEY"
+]
+
+
+def validate_environment() -> Dict[str, Any]:
+    """Validate that required environment variables are set"""
+    import os
+    
+    missing_vars = []
+    for var in REQUIRED_ENV_VARS:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    return {
+        "valid": len(missing_vars) == 0,
+        "missing_variables": missing_vars,
+        "message": f"Missing environment variables: {missing_vars}" if missing_vars else "All required environment variables are set"
+    }
+
+
+
+File Name: example_usage.py
+
+-----------------------------
+
+File Content: 
+
+#!/usr/bin/env python3
 """
+Example usage of the Company Researcher
+
+This script demonstrates different ways to use the company researcher:
+1. Basic research
+2. Research with user notes
+3. Custom configuration
+4. Batch research for multiple companies
+"""
+
+import asyncio
+import json
+from typing import List, Dict, Any
+
+from company_researcher import CompanyResearcher, research_company
+from config import DefaultConfigs, validate_environment
+
+
+async def example_basic_research():
+    """Example 1: Basic company research"""
+    print("\n🔍 Example 1: Basic Research")
+    print("-" * 40)
+    
+    results = await research_company(
+        company_name="Stripe",
+        user_notes="Focus on payment processing and recent expansion"
+    )
+    
+    # Print results
+    researcher = CompanyResearcher()
+    researcher.print_results(results)
+    
+    return results
+
+
+async def example_custom_config():
+    """Example 2: Research with custom configuration"""
+    print("\n🔍 Example 2: Custom Configuration (Quick Research)")
+    print("-" * 40)
+    
+    # Use quick research configuration
+    config = DefaultConfigs.quick_research()
+    
+    researcher = CompanyResearcher(
+        max_search_queries=config.max_search_queries,
+        max_search_results=config.max_search_results,
+        max_reflections=config.max_reflections
+    )
+    
+    results = await researcher.research_company(
+        company_name="Anthropic",
+        user_notes="AI safety company, focus on Claude"
+    )
+    
+    researcher.print_results(results)
+    return results
+
+
+async def example_thorough_research():
+    """Example 3: Thorough research with more queries"""
+    print("\n🔍 Example 3: Thorough Research")
+    print("-" * 40)
+    
+    config = DefaultConfigs.thorough_research()
+    
+    researcher = CompanyResearcher(
+        max_search_queries=config.max_search_queries,
+        max_search_results=config.max_search_results,
+        max_reflections=config.max_reflections
+    )
+    
+    results = await researcher.research_company(
+        company_name="Databricks",
+        user_notes="Data and AI platform, recent IPO rumors"
+    )
+    
+    researcher.print_results(results)
+    return results
+
+
+async def example_batch_research():
+    """Example 4: Research multiple companies"""
+    print("\n🔍 Example 4: Batch Research")
+    print("-" * 40)
+    
+    companies = [
+        {"name": "Notion", "notes": "Productivity and note-taking platform"},
+        {"name": "Figma", "notes": "Design collaboration tool, acquired by Adobe"},
+        {"name": "Linear", "notes": "Project management for software teams"}
+    ]
+    
+    results = {}
+    
+    # Use quick config for batch processing
+    config = DefaultConfigs.quick_research()
+    researcher = CompanyResearcher(
+        max_search_queries=config.max_search_queries,
+        max_search_results=config.max_search_results,
+        max_reflections=config.max_reflections
+    )
+    
+    for company in companies:
+        print(f"\n🔍 Researching {company['name']}...")
         
+        result = await researcher.research_company(
+            company_name=company['name'],
+            user_notes=company['notes']
+        )
+        
+        results[company['name']] = result
+        
+        # Brief summary
+        info = result['company_info']
+        print(f"✅ {company['name']}: {info.get('product_description', 'N/A')[:100]}...")
+    
+    return results
+
+
+async def interactive_research():
+    """Interactive research - ask user for company name"""
+    print("\n🔍 Interactive Research")
+    print("-" * 40)
+    
+    try:
+        company_name = input("Enter company name to research: ").strip()
+        if not company_name:
+            print("❌ No company name provided")
+            return None
+        
+        user_notes = input("Enter any specific notes (optional): ").strip()
+        if not user_notes:
+            user_notes = None
+        
+        print(f"\n🚀 Starting research for: {company_name}")
+        
+        results = await research_company(
+            company_name=company_name,
+            user_notes=user_notes
+        )
+        
+        researcher = CompanyResearcher()
+        researcher.print_results(results)
+        
+        # Ask if user wants to save results
+        save = input("\nSave results to file? (y/n): ").strip().lower()
+        if save == 'y':
+            filename = f"{company_name.lower().replace(' ', '_')}_research.json"
+            with open(filename, 'w') as f:
+                json.dump(results, f, indent=2)
+            print(f"💾 Results saved to: {filename}")
+        
+        return results
+        
+    except KeyboardInterrupt:
+        print("\n❌ Research cancelled by user")
+        return None
+
+
+def save_results(results: Dict[str, Any], filename: str):
+    """Save research results to JSON file"""
+    with open(filename, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"💾 Results saved to: {filename}")
+
+
+async def main():
+    """Main function to run examples"""
+    
+    print("🚀 Company Researcher Examples")
+    print("=" * 50)
+    
+    # Validate environment
+    env_check = validate_environment()
+    if not env_check['valid']:
+        print(f"❌ {env_check['message']}")
+        print("Please set the required environment variables:")
+        for var in env_check['missing_variables']:
+            print(f"   - {var}")
+        return
+    
+    print("✅ Environment validated")
+    
+    # Menu
+    print("\nChoose an example to run:")
+    print("1. Basic Research (Stripe)")
+    print("2. Custom Config - Quick Research (Anthropic)")  
+    print("3. Thorough Research (Databricks)")
+    print("4. Batch Research (Multiple companies)")
+    print("5. Interactive Research (Your choice)")
+    print("6. Run all examples")
+    
+    try:
+        choice = input("\nEnter choice (1-6): ").strip()
+        
+        if choice == "1":
+            results = await example_basic_research()
+            save_results(results, "stripe_research.json")
+            
+        elif choice == "2":
+            results = await example_custom_config()
+            save_results(results, "anthropic_research.json")
+            
+        elif choice == "3":
+            results = await example_thorough_research()
+            save_results(results, "databricks_research.json")
+            
+        elif choice == "4":
+            results = await example_batch_research()
+            save_results(results, "batch_research.json")
+            
+        elif choice == "5":
+            results = await interactive_research()
+            
+        elif choice == "6":
+            print("\n🚀 Running all examples...")
+            
+            results1 = await example_basic_research()
+            save_results(results1, "stripe_research.json")
+            
+            results2 = await example_custom_config()
+            save_results(results2, "anthropic_research.json")
+            
+            results3 = await example_batch_research()
+            save_results(results3, "batch_research.json")
+            
+            print("\n✅ All examples completed!")
+            
+        else:
+            print("❌ Invalid choice")
+            
+    except KeyboardInterrupt:
+        print("\n❌ Cancelled by user")
+    except Exception as e:
+        print(f"❌ Error: {e}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+File Name: models.py
+
+-----------------------------
+
+File Content: 
+
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+
+
+class CompanyInfo(BaseModel):
+    """Basic information about a company"""
+    company_name: str = Field(description="Official name of the company")
+    founding_year: Optional[int] = Field(default=None, description="Year the company was founded")
+    founder_names: List[str] = Field(default_factory=list, description="Names of the founding team members")
+    product_description: Optional[str] = Field(default=None, description="Brief description of the company's main product or service")
+    funding_summary: Optional[str] = Field(default=None, description="Summary of the company's funding history")
+    notable_customers: Optional[str] = Field(default=None, description="Known customers that use company's product/service")
+
+
+class SearchQuery(BaseModel):
+    """Represents a search query to be executed"""
+    query: str
+    purpose: str  # What information this query is meant to find
+
+
+class ResearchState(BaseModel):
+    """State maintained throughout the research process"""
+    company_name: str
+    user_notes: Optional[str] = None
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+    search_queries_generated: List[SearchQuery] = Field(default_factory=list)
+    search_results: List[Dict[str, Any]] = Field(default_factory=list)
+    company_info: CompanyInfo = Field(default_factory=lambda: CompanyInfo(company_name=""))
+    queries_executed: int = 0
+    reflections_done: int = 0
+    max_search_queries: int = 8
+    max_search_results: int = 50
+    max_reflections: int = 3
+    research_complete: bool = False
+
+
+class SearchResult(BaseModel):
+    """Represents a search result from Tavily API"""
+    title: str
+    url: str
+    content: str
+    score: float
+    raw_content: Optional[str] = None
+
+
+
+File Name: nodes.py
+
+-----------------------------
+
+File Content: 
+
+import asyncio
+import json
+from typing import List, Dict, Any
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage, SystemMessage
+from tavily import TavilyClient
+import os
+from models import ResearchState, SearchQuery, CompanyInfo, SearchResult
+
+
+class QueryGenerationNode:
+    """Node responsible for generating search queries"""
+    
+    def __init__(self, llm: ChatOpenAI):
+        self.llm = llm
+    
+    async def __call__(self, state: ResearchState) -> ResearchState:
+        """Generate search queries for company research"""
+        
+        # Don't generate more queries if we've reached the limit
+        if state.queries_executed >= state.max_search_queries:
+            return state
+        
+        # Determine how many queries to generate
+        remaining_queries = state.max_search_queries - state.queries_executed
+        queries_to_generate = min(4, remaining_queries)  # Generate up to 4 at a time
+        
+        # Build context from previous research
+        context = ""
+        if state.search_results:
+            context = f"\nPrevious search results summary: {len(state.search_results)} results found"
+        
+        user_notes_context = f"\nUser notes: {state.user_notes}" if state.user_notes else ""
+        
+        system_prompt = f"""You are a research assistant. Generate {queries_to_generate} specific search queries to find information about the company "{state.company_name}".
+
+Focus on finding:
+1. Company founding year and founders
+2. Product/service descriptions
+3. Funding history and investors
+4. Notable customers and partnerships
+5. Recent news and developments
+
+Current research progress:
+- Company: {state.company_name}
+- Queries executed: {state.queries_executed}/{state.max_search_queries}
+- Current info: {state.company_info.model_dump()}
+{context}{user_notes_context}
+
+Generate diverse, specific queries that will help fill missing information. Return exactly {queries_to_generate} queries, each on a new line in this format:
+QUERY: [search query]
+PURPOSE: [what information this query aims to find]
+
+Example:
+QUERY: {state.company_name} founders founding team history
+PURPOSE: Find founding year and founder names
+"""
+
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Convert this to SQL: {state.user_query}")
+            HumanMessage(content=f"Generate {queries_to_generate} search queries for researching {state.company_name}")
         ]
         
-        try:
-            response = self.llm.invoke(messages)
-            sql_query = response.content.strip()
+        response = await self.llm.ainvoke(messages)
+        
+        # Parse the response to extract queries
+        queries = []
+        lines = response.content.strip().split('\n')
+        
+        current_query = None
+        current_purpose = None
+        
+        for line in lines:
+            line = line.strip()
+            if line.startswith('QUERY:'):
+                current_query = line[6:].strip()
+            elif line.startswith('PURPOSE:'):
+                current_purpose = line[8:].strip()
+                if current_query and current_purpose:
+                    queries.append(SearchQuery(query=current_query, purpose=current_purpose))
+                    current_query = None
+                    current_purpose = None
+        
+        # Add to state
+        state.search_queries_generated.extend(queries)
+        state.messages.append({
+            "type": "query_generation",
+            "queries": [q.model_dump() for q in queries],
+            "total_generated": len(queries)
+        })
+        
+        return state
+
+
+class WebSearchNode:
+    """Node responsible for executing web searches"""
+    
+    def __init__(self, tavily_client: TavilyClient):
+        self.tavily_client = tavily_client
+    
+    async def __call__(self, state: ResearchState) -> ResearchState:
+        """Execute web searches for pending queries"""
+        
+        # Get unexecuted queries
+        unexecuted_queries = state.search_queries_generated[state.queries_executed:]
+        
+        if not unexecuted_queries:
+            return state
+        
+        # Execute searches in parallel (but limit concurrency)
+        search_tasks = []
+        for query in unexecuted_queries:
+            if state.queries_executed >= state.max_search_queries:
+                break
+            search_tasks.append(self._search_query(query.query))
+            state.queries_executed += 1
+        
+        if search_tasks:
+            # Execute searches with limited concurrency
+            semaphore = asyncio.Semaphore(3)  # Max 3 concurrent searches
             
-            if sql_query == "IRRELEVANT_QUERY":
-                state.error = "irrelevant"
-            else:
-                state.sql_query = sql_query
-                
-        except Exception as e:
-            state.error = f"SQL generation failed: {str(e)}"
+            async def limited_search(task):
+                async with semaphore:
+                    return await task
+            
+            search_results = await asyncio.gather(*[limited_search(task) for task in search_tasks])
+            
+            # Process and store results
+            for i, results in enumerate(search_results):
+                if results:
+                    for result in results:
+                        if len(state.search_results) < state.max_search_results:
+                            state.search_results.append({
+                                "query": unexecuted_queries[i].query,
+                                "purpose": unexecuted_queries[i].purpose,
+                                "title": result.get("title", ""),
+                                "url": result.get("url", ""),
+                                "content": result.get("content", ""),
+                                "score": result.get("score", 0.0)
+                            })
+            
+            state.messages.append({
+                "type": "web_search",
+                "queries_executed": len(search_tasks),
+                "results_found": len([r for r in search_results if r]),
+                "total_results": len(state.search_results)
+            })
         
         return state
     
-    def execute_sql_node(self, state: AgentState) -> AgentState:
-        """Execute the generated SQL query"""
-        if state.error:
-            return state
-            
+    async def _search_query(self, query: str) -> List[Dict[str, Any]]:
+        """Execute a single search query"""
         try:
-            results = self.db.execute_query(state.sql_query)
-            state.sql_results = results
-            
+            # Use Tavily search
+            response = self.tavily_client.search(
+                query=query,
+                search_depth="basic",
+                include_images=False,
+                include_answer=False,
+                max_results=5
+            )
+            return response.get("results", [])
         except Exception as e:
-            state.error = f"SQL execution failed: {str(e)}"
-        
-        return state
+            print(f"Search error for query '{query}': {e}")
+            return []
+
+
+class InformationExtractionNode:
+    """Node responsible for extracting structured information from search results"""
     
-    def generate_response_node(self, state: AgentState) -> AgentState:
-        """Generate natural language response from SQL results"""
-        if state.error:
+    def __init__(self, llm: ChatOpenAI):
+        self.llm = llm
+    
+    async def __call__(self, state: ResearchState) -> ResearchState:
+        """Extract company information from search results"""
+        
+        if not state.search_results:
             return state
         
-        system_prompt = """You are a helpful assistant that explains database query results in natural language.
+        # Prepare search results for processing
+        search_context = ""
+        for i, result in enumerate(state.search_results[-10:]):  # Use last 10 results
+            search_context += f"\n--- Result {i+1} ---\n"
+            search_context += f"Query: {result['query']}\n"
+            search_context += f"Title: {result['title']}\n"
+            search_context += f"Content: {result['content'][:500]}...\n"
+        
+        system_prompt = f"""You are an expert information extraction assistant. Extract and update company information from the provided search results.
 
-Given a user's original question and the SQL query results, provide a clear, concise response in natural language.
+Current company information:
+{state.company_info.model_dump_json(indent=2)}
 
-Rules:
-1. Be conversational and friendly
-2. Present the data in an organized way
-3. If no results, say "No results found for your query"
-4. Don't mention the SQL query or technical details
-5. Focus on answering the user's original question
+Based on the search results below, update the company information. Follow these rules:
+1. Only update fields with confident, factual information
+2. For founder_names, provide a list of individual names
+3. Keep descriptions concise but informative
+4. If you find conflicting information, use the most recent/reliable source
+5. Leave fields as null/empty if no reliable information is found
+
+Return the updated information in this exact JSON format:
+{{
+    "company_name": "string",
+    "founding_year": integer or null,
+    "founder_names": ["name1", "name2"] or [],
+    "product_description": "string" or null,
+    "funding_summary": "string" or null,
+    "notable_customers": "string" or null
+}}
+
+Search Results:
+{search_context}
 """
-        
-        results_text = ""
-        if not state.sql_results:
-            results_text = "No results found."
-        elif len(state.sql_results) == 0:
-            results_text = "No results found."
-        else:
-            results_text = f"Found {len(state.sql_results)} results:\n"
-            for i, row in enumerate(state.sql_results[:10], 1):
-                row_text = ", ".join([f"{k}: {v}" for k, v in row.items()])
-                results_text += f"{i}. {row_text}\n"
-            
-            if len(state.sql_results) > 10:
-                results_text += f"... and {len(state.sql_results) - 10} more results"
-        
+
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"""
-Original question: {state.user_query}
-Query results: {results_text}
-
-Provide a natural language response to the user's question based on these results.
-""")
+            HumanMessage(content=f"Extract and update information for {state.company_name}")
         ]
         
+        response = await self.llm.ainvoke(messages)
+        
         try:
-            response = self.llm.invoke(messages)
-            state.final_response = response.content.strip()
+            # Parse the JSON response
+            import json
+            # Find JSON in the response
+            content = response.content.strip()
+            if content.startswith('```json'):
+                content = content[7:]
+            if content.endswith('```'):
+                content = content[:-3]
+            
+            extracted_data = json.loads(content)
+            
+            # Update the company info
+            state.company_info = CompanyInfo(**extracted_data)
+            
+            state.messages.append({
+                "type": "information_extraction",
+                "extracted_fields": list(extracted_data.keys()),
+                "updated_info": extracted_data
+            })
             
         except Exception as e:
-            state.error = f"Response generation failed: {str(e)}"
+            print(f"Error parsing extracted information: {e}")
+            state.messages.append({
+                "type": "information_extraction_error",
+                "error": str(e),
+                "response": response.content
+            })
         
         return state
+
+
+class ReflectionNode:
+    """Node responsible for determining if research is complete"""
     
-    def handle_error_node(self, state: AgentState) -> AgentState:
-        """Handle errors and provide appropriate responses"""
-        if state.error == "irrelevant":
-            state.final_response = "I don't know the answer to that question. I can only help with queries related to the Chinook music store database, including information about artists, albums, tracks, customers, and sales."
+    def __init__(self, llm: ChatOpenAI):
+        self.llm = llm
+    
+    async def __call__(self, state: ResearchState) -> ResearchState:
+        """Determine if we have sufficient information about the company"""
+        
+        # Check if we've exceeded reflection limit
+        if state.reflections_done >= state.max_reflections:
+            state.research_complete = True
+            return state
+        
+        # Check if we've used all search queries
+        if state.queries_executed >= state.max_search_queries:
+            state.research_complete = True
+            return state
+        
+        current_info = state.company_info.model_dump()
+        
+        system_prompt = f"""You are a research quality assessor. Evaluate if we have sufficient information about the company "{state.company_name}".
+
+Current information gathered:
+{json.dumps(current_info, indent=2)}
+
+Research progress:
+- Search queries executed: {state.queries_executed}/{state.max_search_queries}
+- Search results collected: {len(state.search_results)}
+- Reflections done: {state.reflections_done}/{state.max_reflections}
+
+Evaluation criteria:
+1. Do we have the company name? (Required)
+2. Do we have founding year and/or founders?
+3. Do we have a product/service description?
+4. Do we have funding information?
+5. Do we have notable customers?
+
+Respond with either:
+SUFFICIENT: [brief reason why research is complete]
+OR
+INSUFFICIENT: [specific gaps that need more research]
+
+Focus on the most critical missing information that would make this research valuable.
+"""
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content="Is the current company information sufficient?")
+        ]
+        
+        response = await self.llm.ainvoke(messages)
+        
+        state.reflections_done += 1
+        
+        if response.content.strip().startswith('SUFFICIENT'):
+            state.research_complete = True
+            state.messages.append({
+                "type": "reflection",
+                "decision": "sufficient",
+                "reason": response.content.strip()[11:].strip(),
+                "reflection_number": state.reflections_done
+            })
         else:
-            state.final_response = "I don't know the answer to that question."
+            state.research_complete = False
+            state.messages.append({
+                "type": "reflection", 
+                "decision": "insufficient",
+                "gaps": response.content.strip()[13:].strip(),
+                "reflection_number": state.reflections_done
+            })
         
         return state
+
+
+
+File Name: test_basic.py
+
+-----------------------------
+
+File Content: 
+
+#!/usr/bin/env python3
+"""
+Basic test script for the Company Researcher
+"""
+
+import asyncio
+import sys
+from company_researcher import research_company
+from config import validate_environment
+
+
+async def test_basic_research():
+    """Test basic research functionality"""
     
-    def query(self, user_input: str) -> str:
-        """Main interface to query the agent"""
-        initial_state = AgentState(user_query=user_input)
+    # Validate environment
+    env_check = validate_environment()
+    if not env_check['valid']:
+        print(f"❌ Environment validation failed: {env_check['message']}")
+        return False
+    
+    print("✅ Environment validation passed")
+    
+    try:
+        print("🔍 Testing basic research with a quick search...")
         
-        try:
-            final_state = self.graph.invoke(initial_state)
-            return final_state.final_response
-        except Exception as e:
-            return "I don't know the answer to that question."
+        # Test with a well-known company
+        results = await research_company(
+            company_name="Google",
+            user_notes="Quick test - focus on core information",
+            max_search_queries=3,  # Limit for quick test
+            max_reflections=1
+        )
+        
+        # Check results
+        company_info = results.get('company_info', {})
+        research_summary = results.get('research_summary', {})
+        
+        print(f"✅ Research completed successfully!")
+        print(f"   Company: {company_info.get('company_name', 'N/A')}")
+        print(f"   Queries executed: {research_summary.get('queries_executed', 0)}")
+        print(f"   Results collected: {research_summary.get('results_collected', 0)}")
+        print(f"   Research complete: {research_summary.get('research_complete', False)}")
+        
+        # Basic validation
+        if company_info.get('company_name'):
+            print("✅ Company name extracted successfully")
+        else:
+            print("⚠️  No company name extracted")
+        
+        if research_summary.get('queries_executed', 0) > 0:
+            print("✅ Search queries executed successfully")
+        else:
+            print("❌ No search queries executed")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Test failed with error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def main():
+    """Main test function"""
+    print("🧪 Company Researcher Basic Test")
+    print("=" * 40)
     
-    def close(self):
-        """Clean up resources"""
-        self.db.close()
+    try:
+        success = asyncio.run(test_basic_research())
+        
+        if success:
+            print("\n✅ All tests passed! The company researcher is working correctly.")
+            sys.exit(0)
+        else:
+            print("\n❌ Tests failed. Please check the configuration and API keys.")
+            sys.exit(1)
+            
+    except KeyboardInterrupt:
+        print("\n❌ Test cancelled by user")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 

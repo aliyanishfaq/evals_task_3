@@ -158,7 +158,8 @@ class HttpSpy:
                 hits.append(url)
         return hits
 
-def test_basics(monkeypatch):
+@pytest.mark.asyncio
+async def test_basics(monkeypatch):
     score = {"candidate": CANDIDATE_NAME, "bucket": "basic", "points": 0, "max_points": 22, "details": []}
     failures = []
 
@@ -185,7 +186,7 @@ def test_basics(monkeypatch):
         app = _get_app(mod)
         spy = HttpSpy(monkeypatch)
         initial_state = INITIAL_STATE
-        out = app.invoke(initial_state)
+        out = await app.ainvoke(initial_state)
         with open("txt_dump/validate_llm_call.txt", "w") as f:
             f.write(str(out))
         hits = spy.llm_calls()
@@ -203,7 +204,7 @@ def test_basics(monkeypatch):
     # C) Accepts minimal state (2 pts)
     try:
         state = MINIMAL_STATE
-        out = app.invoke(state)
+        out = await app.ainvoke(state)
         is_ok = isinstance(out, dict)
         _add(score, 2, "accepts_minimal_state", is_ok, "Accepts minimal state" if is_ok else "Does not accept minimal state")
         with open("txt_dump/accepts_minimal_state.txt", "w") as f:
@@ -216,7 +217,7 @@ def test_basics(monkeypatch):
     # D) company object has all the requested properties
     try:
         state = INITIAL_STATE
-        out = app.invoke(state)
+        out = await app.ainvoke(state)
         with open("txt_dump/company_object_has_all_properties.txt", "w") as f:
             f.write(str(out))
         response = company_object_parser(out)
@@ -240,7 +241,7 @@ def test_basics(monkeypatch):
     # E) all company properties hold information
     try:
         state = INITIAL_STATE
-        out = app.invoke(state)
+        out = await app.ainvoke(state)
         with open("txt_dump/all_company_properties_hold_information.txt", "w") as f:
             f.write(str(out))
         response = company_object_parser(out)
@@ -271,7 +272,7 @@ def test_basics(monkeypatch):
     # F) Request to Tavily API (2 pts)
     try:
         state = INITIAL_STATE
-        out = app.invoke(state)
+        out = await app.ainvoke(state)
         with open("txt_dump/tavily_api_call.txt", "w") as f:
             f.write(str(out))
         tavily_hits = spy.tavily_calls()

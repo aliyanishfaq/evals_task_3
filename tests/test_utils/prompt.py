@@ -35,6 +35,7 @@ Good Practices: Additional qualities of a well-designed Company Researcher agent
 **Code Quality Evidence** (architectural/design issues):
 - No separation of features. Each feature should be in a separate node.
 - Unnecessary complexity
+- Correct primitives for Langgraph types such as state, messages (which should be defined as Annotated[list, add_messages] in state)
 
 **Code Correctness Evidence** (functional/runtime bugs):
 - Runtime exceptions

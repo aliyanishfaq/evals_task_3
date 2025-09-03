@@ -1,0 +1,44 @@
+{
+  "candidate": "claude-vanilla-1",
+  "bucket": "basic",
+  "points": 15,
+  "max_points": 22,
+  "details": [
+    {
+      "key": "config_validate",
+      "points": 0,
+      "passed": false,
+      "msg": "FileNotFoundError: Missing /Users/aliyan/Documents/blog_post_v2/claude_task_3/evals_task_3/../langgraph.json"
+    },
+    {
+      "key": "llm_network_call",
+      "points": 2,
+      "passed": true,
+      "msg": ""
+    },
+    {
+      "key": "accepts_minimal_state",
+      "points": 2,
+      "passed": true,
+      "msg": "Accepts minimal state"
+    },
+    {
+      "key": "company_object_has_all_properties",
+      "points": 6,
+      "passed": true,
+      "msg": "Company object has all the requested properties: ['company_name', 'founding_year', 'founder_names', 'product_description', 'funding_summary', 'notable_customers']"
+    },
+    {
+      "key": "all_company_properties_hold_information",
+      "points": 3,
+      "passed": true,
+      "msg": "Company object has empty properties: founding_year, founder_names, funding_summary (properties with info: 3/6)"
+    },
+    {
+      "key": "tavily_api_call",
+      "points": 2,
+      "passed": true,
+      "msg": "Tavily API calls detected: 40"
+    }
+  ]
+}

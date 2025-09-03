@@ -1,18 +1,10 @@
 from langchain_core.messages import HumanMessage
 
 INITIAL_STATE = {
-    "messages": [HumanMessage(content="Research Anthropic")],
     "company_name": "Anthropic",
-    "notes": "Focus on AI safety research",
-    "company_info": None,
-    "search_queries_used": 0,
-    "search_results": [],
-    "reflection_count": 0,
-    "is_complete": False
 }
 
 MINIMAL_STATE = {
-    "messages": [HumanMessage(content="Research Anthropic")],
     "company_name": "Anthropic",
 }
 

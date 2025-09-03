@@ -24,10 +24,6 @@ def _load_module(agent_py_path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(module_name, str(agent_py_path))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
-    with open(agent_py_path, "r") as f:
-        contents = f.read()
-        with open("agent_test_file.txt", "w") as f:
-            f.write(contents)
     try:
         spec.loader.exec_module(mod)
         return mod, None
@@ -63,7 +59,8 @@ def _add(score, pts, key, ok, msg=""):
         score["points"] += pts
 
 # --- Smoke test (compile + basic invoke) ---
-def test_smoke(monkeypatch):
+@pytest.mark.asyncio
+async def test_smoke(monkeypatch):
     # Scoring model (10 pts total)
     score = {"candidate": CANDIDATE_NAME, "bucket": "smoke", "points": 0, "max_points": 10, "details": []}
 
@@ -89,7 +86,7 @@ def test_smoke(monkeypatch):
     # B) Single invoke (8 pts, partial)
     try:
         initial_state = INITIAL_STATE
-        out = app.invoke(initial_state)  # canonical initial state
+        out = await app.ainvoke(initial_state)  # canonical initial state
         _add(score, 2, "invoke_accepts_canonical_state", True, "")
     except Exception as e:
         _add(score, 2, "invoke_accepts_canonical_state", False, f"{type(e).__name__}: {e}")
